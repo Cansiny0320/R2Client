@@ -176,6 +176,35 @@ export class Engine implements Api {
   async detail(id: string, key: string) {
     return (await this.bucket(id)).head(checkKey(key));
   }
+  async previewDocument(id: string, key: string, format: "text" | "pdf") {
+    if (format !== "text" && format !== "pdf") throw new Error("Unsupported preview format");
+    const limit = format === "pdf" ? 32 * 1024 * 1024 : 512 * 1024;
+    const store = await this.bucket(id);
+    const detail = await store.head(checkKey(key));
+    if (detail.size > limit)
+      throw new Error("This document is too large to preview. Download it to open it.");
+    const response = await store.read(key, 0, detail.etag);
+    const reader = response.bytes.getReader();
+    const bytes = new Uint8Array(detail.size);
+    let at = 0;
+    try {
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        if (at + part.value.length > bytes.length) throw new Error("Object changed during preview");
+        bytes.set(part.value, at);
+        at += part.value.length;
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
+    if (at !== bytes.length) throw new Error("Object changed during preview");
+    if (format === "pdf" && new TextDecoder().decode(bytes.subarray(0, 5)) !== "%PDF-") {
+      throw new Error("This object is not a valid PDF");
+    }
+    return bytes;
+  }
   async index(id: string) {
     await this.initializing;
     return this.driver.load<Index>("index:" + this.profile(id).id);

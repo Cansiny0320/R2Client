@@ -138,24 +138,31 @@ function Preview({
   const category = objectCategory(item.key);
   useEffect(() => {
     let active = true;
-    void Promise.all([
-      p.api.detail(profile.id, item.key),
-      p.api.links(profile.id, item.key, 300, "preview"),
-    ])
-      .then(async ([d, u]) => {
+    let localUrl = "";
+    void (async () => {
+      const d = await p.api.detail(profile.id, item.key);
+      if (!active) return;
+      setDetail(d);
+      if (category === "text" || category === "pdf") {
+        const bytes = await p.api.previewDocument(profile.id, item.key, category);
         if (!active) return;
-        setDetail(d);
-        setUrl(u);
-        if (category === "text" && d.size < 512 * 1024) {
-          const r = await fetch(u, { referrerPolicy: "no-referrer" });
-          if (r.ok && active) setText(await r.text());
+        if (category === "text") setText(new TextDecoder().decode(bytes));
+        else {
+          localUrl = URL.createObjectURL(
+            new Blob([Uint8Array.from(bytes)], { type: "application/pdf" }),
+          );
+          setUrl(localUrl);
         }
-      })
-      .catch((e) => {
-        if (active) setError(e instanceof Error ? e.message : String(e));
-      });
+      } else if (category === "image" || category === "video" || category === "audio") {
+        const u = await p.api.links(profile.id, item.key, 300, "preview");
+        if (active) setUrl(u);
+      }
+    })().catch((e) => {
+      if (active) setError(e instanceof Error ? e.message : String(e));
+    });
     return () => {
       active = false;
+      if (localUrl) URL.revokeObjectURL(localUrl);
     };
   }, [p, profile.id, item.key, category]);
   return (
@@ -169,7 +176,7 @@ function Preview({
           ) : url && category === "audio" ? (
             <audio src={url} controls preload="metadata" />
           ) : url && category === "pdf" ? (
-            <iframe sandbox="" src={url} title={nameOf(item.key)} />
+            <iframe src={url} title={nameOf(item.key)} />
           ) : text ? (
             <pre>{text}</pre>
           ) : (

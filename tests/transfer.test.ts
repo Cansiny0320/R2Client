@@ -229,3 +229,9 @@ test("finished uploads release their staged file handles, including skipped dupl
   assert.deepEqual([...released].sort(), [first.id, second.id].sort());
   assert.equal((await engine.snapshot()).jobs[0]?.state, "completed");
 });
+test("document preview reads through the storage adapter and rejects mislabelled PDFs", async () => {
+  const engine = new Engine(memoryDriver(new DemoStore()));
+  const text = await engine.previewDocument("demo", "documents/guide.txt", "text");
+  assert.match(new TextDecoder().decode(text), /Welcome to the R2Client demo/);
+  await assert.rejects(engine.previewDocument("demo", "README.md", "pdf"), /not a valid PDF/);
+});

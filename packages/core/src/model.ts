@@ -204,6 +204,7 @@ export interface Api {
   reorder(ids: string[]): Promise<void>;
   list(id: string, prefix: string, cursor?: string): Promise<Page>;
   detail(id: string, key: string): Promise<Detail>;
+  previewDocument(id: string, key: string, format: "text" | "pdf"): Promise<Uint8Array>;
   index(id: string): Promise<Index | undefined>;
   scan(id: string): Promise<Index>;
   duplicates(id: string, prefix: string): Promise<Item[][]>;
@@ -257,6 +258,7 @@ export const METHODS: ReadonlySet<keyof Api> = new Set([
   "reorder",
   "list",
   "detail",
+  "previewDocument",
   "index",
   "scan",
   "duplicates",

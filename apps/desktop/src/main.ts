@@ -157,12 +157,12 @@ async function start() {
         const until=Date.now()+10000;
         const timer=setInterval(()=>{
           const name=document.querySelector(".bucket-name strong")?.textContent;
-          if(name&&typeof window.r2client?.api?.snapshot==="function"){clearInterval(timer);resolve({bucket:name,bridge:true,title:document.title});}
+          if(name&&typeof window.r2client?.api?.snapshot==="function"){clearInterval(timer);window.r2client.api.previewDocument("demo","documents/guide.txt","text").then(bytes=>resolve({bucket:name,bridge:true,title:document.title,preview:new TextDecoder().decode(bytes).includes("Welcome to the R2Client demo.")}),reject);}
           else if(Date.now()>until){clearInterval(timer);reject(new Error("Renderer or preload did not initialize"));}
         },50);
       })`);
       await writeFile(smoke, JSON.stringify(result));
-      app.exit(0);
+      app.exit(result?.preview === true ? 0 : 1);
     } catch (e) {
       await writeFile(
         smoke,
