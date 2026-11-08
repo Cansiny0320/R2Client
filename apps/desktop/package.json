@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "description": "An open-source desktop client for Cloudflare R2",
-  "author": "R2Client contributors",
+  "homepage": "https://github.com/Cansiny0320/R2Client",
+  "author": {
+    "name": "R2Client contributors",
+    "email": "51797219+Cansiny0320@users.noreply.github.com"
+  },
   "type": "module",
   "main": "dist/main.cjs",
   "scripts": {
@@ -43,7 +47,8 @@
         "deb"
       ],
       "category": "Utility",
-      "maintainer": "R2Client contributors"
+      "maintainer": "R2Client contributors <51797219+Cansiny0320@users.noreply.github.com>",
+      "executableName": "r2client"
     },
     "win": {
       "target": [

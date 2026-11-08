@@ -83,7 +83,7 @@ export function formatLink(
     return (
       (img ? "!" : "") +
       "[" +
-      name.replace(/[\[\]\\]/g, "\\$&") +
+      name.replaceAll("\\", "\\\\").replaceAll("[", "\\[").replaceAll("]", "\\]") +
       "](<" +
       url.replace(/[<>]/g, encodeSegment) +
       ">)"

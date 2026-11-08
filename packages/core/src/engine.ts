@@ -66,7 +66,24 @@ export class Engine implements Api {
     this.profiles = profiles ?? [demoProfile];
     this.staged = stages ?? [];
     this.scheduled = schedules ?? [];
-    this.queues = new Transfers(this.driver, (id) => this.bucket(id), jobs ?? []);
+    this.queues = new Transfers(
+      this.driver,
+      (id) => this.bucket(id),
+      jobs ?? [],
+      async (job) => {
+        if (job.source) await this.releaseIdleSource(job.source.id);
+      },
+    );
+  }
+  private async releaseIdleSource(id: string) {
+    if (
+      this.staged.some((s) => s.id === id) ||
+      this.queues.jobs.some(
+        (j) => j.source?.id === id && !["completed", "cancelled"].includes(j.state),
+      )
+    )
+      return;
+    await this.driver.disposeSource?.(id).catch(() => {});
   }
   private profile(id: string) {
     const p = this.profiles.find((p) => p.id === id);
@@ -343,8 +360,8 @@ export class Engine implements Api {
   async unstage(id: string) {
     await this.initializing;
     this.staged = this.staged.filter((s) => s.id !== id);
-    if (!this.queues.jobs.some((j) => j.source?.id === id)) await this.driver.disposeSource?.(id);
     await this.driver.save("stages", this.staged);
+    await this.releaseIdleSource(id);
   }
   async upload(
     id: string,
@@ -412,6 +429,7 @@ export class Engine implements Api {
     await this.queues.add(jobs, concurrency);
     this.staged = this.staged.filter((s) => !entries.some((e) => e.id === s.id));
     await this.driver.save("stages", this.staged);
+    for (const { id } of entries) await this.releaseIdleSource(id);
     return skipped;
   }
   async download(id: string, keys: Item[], directory: string, prefix: string, replace: boolean) {
@@ -478,8 +496,10 @@ export class Engine implements Api {
       job.source.modified !== src.modified
     )
       throw new Error("Choose the original file");
+    const previous = job.source.id;
     job.source = { ...job.source, id: src.id };
     await this.queues.persist();
+    await this.releaseIdleSource(previous);
   }
   async job(id: string, action: "pause" | "resume" | "cancel" | "remove") {
     await this.initializing;

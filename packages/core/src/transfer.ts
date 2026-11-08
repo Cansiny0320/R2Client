@@ -198,6 +198,7 @@ export class Transfers {
     private driver: Driver,
     private getStore: (id: string) => Promise<ObjectStore>,
     jobs: Job[],
+    private onTerminal?: (job: Job) => Promise<void>,
   ) {
     this.jobs = jobs.map((j) =>
       j.state === "running" || j.state === "queued" ? { ...j, state: "paused" } : j,
@@ -250,6 +251,7 @@ export class Transfers {
       job.error = signal.aborted ? undefined : errorText(e);
     }
     await save();
+    if (job.state === "completed") await this.onTerminal?.(job);
   }
   async act(id: string, action: "pause" | "resume" | "cancel" | "remove") {
     const j = this.jobs.find((x) => x.id === id);
@@ -282,6 +284,7 @@ export class Transfers {
         j.error = "Could not cancel: " + errorText(e);
       }
       await this.persist();
+      if (j.state === "cancelled") await this.onTerminal?.(j);
       return;
     }
     if (action === "remove" && ["completed", "cancelled"].includes(j.state)) {

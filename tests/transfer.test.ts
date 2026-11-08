@@ -196,3 +196,36 @@ test("bulk plan rejects collisions and move preserves the source if copy fails",
     /Conflicting rename/,
   );
 });
+test("finished uploads release their staged file handles, including skipped duplicates", async () => {
+  const d = memoryDriver(new DemoStore());
+  const first = local("first-release.txt", new TextEncoder().encode("release staged source"));
+  const second = { ...first, id: "second", name: "duplicate.txt" };
+  const files = new Map([first, second].map((file) => [file.id, file]));
+  const released = new Set<string>();
+  d.source = async (id) => files.get(id);
+  d.disposeSource = async (id) => {
+    released.add(id);
+    files.delete(id);
+  };
+  const engine = new Engine(d);
+  await engine.stage([first, second]);
+  assert.equal(
+    await engine.upload(
+      "demo",
+      "",
+      [
+        { id: first.id, name: first.name },
+        { id: second.id, name: second.name },
+      ],
+      false,
+      1,
+      true,
+    ),
+    1,
+  );
+  const until = Date.now() + 1500;
+  while (Date.now() < until && released.size < 2)
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.deepEqual([...released].sort(), [first.id, second.id].sort());
+  assert.equal((await engine.snapshot()).jobs[0]?.state, "completed");
+});
