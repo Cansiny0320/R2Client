@@ -1,0 +1,14 @@
+{
+  "name": "@r2client/share",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "types": "wrangler types --env-interface ShareBindings"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "miniflare": "latest",
+    "wrangler": "latest"
+  }
+}

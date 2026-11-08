@@ -1,0 +1,23 @@
+{
+  "name": "r2client-share",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-30",
+  "vars": { "ALLOWED_ORIGINS": "https://r2.example.com,r2app://local" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "r2client-share",
+      "database_id": "00000000-0000-4000-8000-000000000000",
+    },
+  ],
+  "ratelimits": [
+    { "name": "UNLOCK_LIMIT", "namespace_id": "31001", "simple": { "limit": 8, "period": 60 } },
+    { "name": "ISSUE_LIMIT", "namespace_id": "31002", "simple": { "limit": 60, "period": 60 } },
+  ],
+  "triggers": { "crons": ["17 4 * * *"] },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 0.1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 },
+  },
+}

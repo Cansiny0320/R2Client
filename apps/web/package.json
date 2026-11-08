@@ -1,0 +1,29 @@
+{
+  "name": "@r2client/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build && node scripts/copy-shell.mjs",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@r2client/core": "workspace:*",
+    "@r2client/s3": "workspace:*",
+    "@r2client/ui": "workspace:*",
+    "@tanstack/react-router": "latest",
+    "@tanstack/react-start": "latest",
+    "idb-keyval": "latest",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "latest",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "latest",
+    "tailwindcss": "latest",
+    "vite": "^8",
+    "wrangler": "latest"
+  }
+}

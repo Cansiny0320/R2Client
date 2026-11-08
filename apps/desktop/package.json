@@ -1,0 +1,56 @@
+{
+  "name": "@r2client/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An open-source desktop client for Cloudflare R2",
+  "author": "R2Client contributors",
+  "type": "module",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "electron .",
+    "package": "electron-builder --publish never"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@r2client/core": "workspace:*",
+    "@r2client/s3": "workspace:*",
+    "electron": "latest",
+    "electron-builder": "^26",
+    "esbuild": "latest",
+    "png-to-ico": "latest"
+  },
+  "build": {
+    "appId": "top.cansiny.r2client",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.utilities"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility",
+      "maintainer": "R2Client contributors"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+  },
+  "productName": "R2Client"
+}

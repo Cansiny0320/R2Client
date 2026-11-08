@@ -1,0 +1,26 @@
+{
+  "name": "r2client",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @r2client/web dev",
+    "build": "pnpm --filter @r2client/web build && pnpm --filter @r2client/desktop build",
+    "check": "tsc --noEmit && vp lint",
+    "format": "vp fmt",
+    "test": "tsx --test tests/*.test.ts",
+    "test:browser": "playwright test",
+    "desktop:dev": "pnpm build && pnpm --filter @r2client/desktop start",
+    "desktop:package": "pnpm build && pnpm --filter @r2client/desktop package"
+  },
+  "devDependencies": {
+    "@playwright/test": "latest",
+    "@types/node": "^24",
+    "tsx": "latest",
+    "typescript": "~5.9.3",
+    "vite-plus": "latest"
+  },
+  "engines": {
+    "node": ">=22.15"
+  },
+  "packageManager": "pnpm@10.33.2"
+}
