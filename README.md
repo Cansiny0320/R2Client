@@ -8,26 +8,13 @@
   <a href="#赞赏">赞赏</a>
 </p>
 
-## 使用
+![R2Client 桌面端截图，展示存储桶和文件网格](.github/screenshots/r2client.jpg)
 
-打开上方的 GitHub Actions 链接，选择一次成功的构建，在 **Artifacts** 下载对应平台的安装包。安装包未签名，macOS 版也未公证。
-
-首次打开时填写 Cloudflare Account ID、桶名和 R2 S3 凭据。应用直接连接 R2，无需配置 CORS；可在系统支持加密存储时保存凭据。
+## 功能
 
 - 管理多个账号和桶，搜索、预览文件，批量移动、复制或删除对象。
 - 上传文件、目录、剪贴板内容或 URL，支持分片、续传和上传去重；也可定时同步目录到本机。
 - 分享公开链接或临时签名链接；[密码分享](docs/hosting.md)需单独部署。转码和压缩需安装 [FFmpeg](https://ffmpeg.org/download.html)。
-
-## 开发
-
-使用 Node.js 24 和 pnpm。
-
-```sh
-pnpm install --frozen-lockfile
-pnpm desktop:dev
-```
-
-本地打包运行 `pnpm desktop:package`。提交问题时，请附上系统版本、复现步骤和报错信息，勿附凭据。
 
 ## 赞赏
 

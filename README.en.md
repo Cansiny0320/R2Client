@@ -8,26 +8,13 @@
   <a href="#support">Support</a>
 </p>
 
-## Getting started
+![R2Client desktop screenshot showing the bucket sidebar and file grid](.github/screenshots/r2client.jpg)
 
-Open the GitHub Actions link above, select a successful run, and download the installer for your platform under **Artifacts**. Installers are unsigned, and the macOS builds are not notarized.
-
-On first launch, enter your Cloudflare Account ID, bucket name, and R2 S3 credentials. The app connects directly to R2 without CORS setup and can save credentials when your system supports encrypted storage.
+## Features
 
 - Manage multiple accounts and buckets, search and preview files, and move, copy, or delete objects in bulk.
 - Upload files, folders, clipboard contents, or URLs with resumable transfers and deduplication. Sync folders to your computer on a schedule.
 - Share public or presigned links. [Password-protected links](docs/hosting.md) need a separate service. Transcoding and compression require [FFmpeg](https://ffmpeg.org/download.html).
-
-## Development
-
-Use Node.js 24 and pnpm.
-
-```sh
-pnpm install --frozen-lockfile
-pnpm desktop:dev
-```
-
-Run `pnpm desktop:package` to build an installer locally. When reporting an issue, include your OS version, steps to reproduce, and error details. Leave out any credentials.
 
 ## Support
 
