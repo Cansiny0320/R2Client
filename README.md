@@ -18,7 +18,7 @@
 
 ## 赞赏
 
-觉得好用的话，欢迎通过[赞赏页面](https://image.cansiny.top/sponsor)用微信或支付宝支持。
+觉得好用的话，欢迎用微信或支付宝扫码支持。
 
 ![微信与支付宝赞赏二维码](.github/sponsorship.webp)
 

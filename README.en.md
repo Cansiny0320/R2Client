@@ -18,7 +18,7 @@
 
 ## Support
 
-If you find R2Client useful, you can support it via WeChat Pay or Alipay on the [support page](https://image.cansiny.top/sponsor).
+If you find R2Client useful, scan a QR code below to support it via WeChat Pay or Alipay.
 
 ![WeChat Pay and Alipay QR codes](.github/sponsorship.webp)
 
