@@ -13,7 +13,7 @@ import {
 import type { ComponentProps, ReactNode } from "react";
 import { useRef } from "react";
 import type { Api, DownloadCompletion, Item, UploadTuning } from "@r2client/core";
-import { DEFAULT_UPLOAD, objectCategory } from "@r2client/core";
+import { DEFAULT_UPLOAD, errorText, objectCategory } from "@r2client/core";
 import { locales } from "./languages";
 import { mediaDefaults } from "./media-settings";
 import type { MediaDefaults } from "./media-settings";
@@ -166,6 +166,29 @@ export function Empty({ label, action }: { label: string; action?: ReactNode }) 
       {action}
     </div>
   );
+}
+export function connectionFailure(error: unknown, t: Tr) {
+  const detail = errorText(error).replace(/^Error invoking remote method '[^']+':\s*/i, "");
+  if (
+    /\b(Unauthorized|AccessDenied|Forbidden|InvalidAccessKeyId|SignatureDoesNotMatch|ExpiredToken)\b/i.test(
+      detail,
+    )
+  )
+    return {
+      credentials: true,
+      message: t(
+        "Check the R2 credentials and their access to this bucket.",
+        "请检查 R2 凭据，以及凭据是否有权访问此存储桶。",
+      ),
+    };
+  if (/\b(ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|ECONNREFUSED|TimeoutError)\b/i.test(detail))
+    return {
+      message: t(
+        "Could not reach R2. Check your network and try again.",
+        "无法连接 R2，请检查网络后重试。",
+      ),
+    };
+  return { message: detail };
 }
 export function FileIcon({ item, size = 22 }: { item: Pick<Item, "kind" | "key">; size?: number }) {
   const map = {

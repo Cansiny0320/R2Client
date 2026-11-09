@@ -6,6 +6,7 @@ import {
   downloadConcurrency,
   errorText,
   joined,
+  nameOf,
   notFound,
   publicLink,
   safeRelative,
@@ -559,6 +560,7 @@ export class Engine implements Api {
     prefix: string,
     replace: boolean,
     options?: { completion: DownloadCompletion; parallel: number },
+    localName?: string,
   ) {
     const store = await this.bucket(id),
       unique = new Map<string, Item>();
@@ -579,7 +581,8 @@ export class Engine implements Api {
     );
     for (const item of unique.values()) {
       if (item.key.endsWith("/")) continue;
-      const relative = item.key.startsWith(prefix) ? item.key.slice(prefix.length) : item.key;
+      const relative =
+        localName ?? (item.key.startsWith(prefix) ? item.key.slice(prefix.length) : item.key);
       try {
         safeRelative(relative);
       } catch {
@@ -587,6 +590,8 @@ export class Engine implements Api {
         continue;
       }
       const destination = JSON.stringify([directory, relative]);
+      if (localName && claimed.has(destination))
+        throw new Error("A download is already using this file name");
       if (claimed.has(destination)) continue;
       claimed.add(destination);
       jobs.push({
@@ -619,6 +624,19 @@ export class Engine implements Api {
   }
   async pickDestination() {
     return this.driver.pickDestination?.();
+  }
+  async downloadAs(
+    id: string,
+    item: Item,
+    replace: boolean,
+    options?: { completion: DownloadCompletion; parallel: number },
+  ) {
+    if (item.kind !== "object") throw new Error("Select one file to save");
+    const target = await this.driver.pickSaveDestination?.(nameOf(item.key));
+    if (!target) return false;
+    if (safeRelative(target.name).length !== 1) throw new Error("Invalid local file name");
+    await this.download(id, [item], target.directory, "", replace, options, target.name);
+    return true;
   }
   async attach(id: string, source: Source) {
     await this.initializing;

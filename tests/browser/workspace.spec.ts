@@ -21,6 +21,7 @@ test("image preview uses a full screen gallery, wraps, and never carries over an
     const data =
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jMZkAAAAASUVORK5CYII=";
     Object.assign(window, {
+      previewDownloads: [] as string[],
       r2client: {
         capabilities: { desktop: true, folders: true },
         api: {
@@ -32,6 +33,10 @@ test("image preview uses a full screen gallery, wraps, and never carries over an
           }),
           index: async () => undefined,
           list: async () => ({ items }),
+          downloadAs: async (_id: string, item: { key: string }) => {
+            (window as unknown as { previewDownloads: string[] }).previewDownloads.push(item.key);
+            return true;
+          },
           detail: async (_id: string, key: string) => ({
             ...items.find((x) => x.key === key),
             type: "image/png",
@@ -57,8 +62,20 @@ test("image preview uses a full screen gallery, wraps, and never carries over an
         .evaluate((img: HTMLImageElement) => img.naturalWidth),
     )
     .toBeGreaterThan(0);
+  const image = viewer.getByRole("img", { name: "first.png" });
+  const originalWidth = (await image.boundingBox())!.width;
+  await viewer.getByRole("button", { name: "Zoom in" }).click();
+  await expect(viewer.getByRole("button", { name: "Reset zoom" })).toHaveText("125%");
+  expect((await image.boundingBox())!.width).toBeGreaterThan(originalWidth);
+  await viewer.getByRole("button", { name: "Save as…" }).click();
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { previewDownloads: string[] }).previewDownloads,
+    ),
+  ).toEqual(["first.png"]);
   await page.keyboard.press("ArrowLeft");
   await expect(viewer).toHaveAccessibleName("second.png");
+  await expect(viewer.getByRole("button", { name: "Reset zoom" })).toHaveText("100%");
   await expect(viewer.getByRole("img", { name: "first.png" })).toHaveCount(0);
   await expect(viewer.getByRole("img", { name: "second.png" })).toBeVisible();
   await viewer.getByRole("button", { name: "Next file" }).click();
@@ -68,6 +85,9 @@ test("image preview uses a full screen gallery, wraps, and never carries over an
   await expect(share.getByRole("img", { name: "QR code" })).toBeVisible();
   await share.getByRole("button", { name: "Close" }).click();
   await expect(viewer).toHaveAccessibleName("first.png");
+  await viewer.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByRole("button", { name: "Preview first.png" })).toBeFocused();
+  await page.getByRole("button", { name: "Preview first.png" }).click();
   await viewer.getByRole("button", { name: "Rename" }).click();
   await expect(page.getByRole("dialog", { name: "Rename" })).toBeVisible();
   await page.keyboard.press("Escape");
@@ -87,6 +107,7 @@ test("first launch goes through the five-step wizard and restores a connected bu
     const stored = () => JSON.parse(localStorage.getItem("test-bucket") || "null");
     const global = window as unknown as Record<string, unknown>;
     let attempts = 0;
+    let scans = 0;
     global.r2client = {
       capabilities: { desktop: true, folders: true },
       api: {
@@ -100,9 +121,14 @@ test("first launch goes through the five-step wizard and restores a connected bu
         list: async () => ({
           items: [{ key: "fixture.txt", kind: "object", modified: "", size: 5 }],
         }),
-        scan: async () => ({ objects: [], updated: "2026-11-08T00:00:00Z", history: [] }),
+        scan: async () => {
+          if (++scans === 1) throw new Error("Connection lost during initial sync");
+          return { objects: [], updated: "2026-11-08T00:00:00Z", history: [] };
+        },
         connect: async (input: Record<string, unknown>) => {
-          if (++attempts === 1) throw new Error("Test connection refused");
+          if (++attempts === 1)
+            throw new Error("Error invoking remote method 'r2:invoke': Unauthorized: Unauthorized");
+          if (attempts > 2) throw new Error("Retry must not save the connection again");
           const { credentials: _credentials, remember: _remember, ...profile } = input;
           localStorage.setItem("test-bucket", JSON.stringify({ ...profile, id: "fixture" }));
         },
@@ -136,9 +162,17 @@ test("first launch goes through the five-step wizard and restores a connected bu
   await expect(page.getByText("fixture_secret", { exact: true })).toHaveCount(0);
   const save = page.getByRole("button", { name: "Validate and save" });
   await save.click();
-  await expect(page.getByRole("alert")).toContainText("Test connection refused");
+  await expect(page.getByRole("alert")).toContainText("Check the R2 credentials");
+  await expect(page.getByRole("alert")).not.toContainText("r2:invoke");
+  await page.getByRole("button", { name: "Edit credentials" }).click();
+  await expect(page.getByLabel("Secret Access Key")).toHaveValue("fixture_secret");
+  await next.click();
+  await next.click();
+  await next.click();
   await save.click();
   await expect(page.getByRole("heading", { name: "Bucket added successfully!" })).toBeVisible();
+  await expect(page.getByRole("status")).toHaveText("Initial sync failed");
+  await page.getByRole("button", { name: "Retry sync" }).click();
   await expect(page.getByRole("status")).toHaveText("Initial sync complete");
   await page.getByRole("button", { name: "Return to list" }).click();
   await expect(page.getByRole("button", { name: "fixture.txt", exact: true })).toBeVisible();
@@ -151,6 +185,15 @@ test("desktop toolbar and saved download folder work without showing a real pick
 }) => {
   await page.addInitScript(() => {
     const calls = { picks: 0, downloads: [] as string[] };
+    let duplicateScans = 0;
+    let bucketScans = 0;
+    const duplicates = ["one.txt", "two.txt"].map((key) => ({
+      key,
+      kind: "object",
+      size: 4,
+      modified: "",
+      etag: key,
+    }));
     const global = window as unknown as Record<string, unknown>;
     global.desktopAlignmentCalls = calls;
     const profile = {
@@ -185,14 +228,29 @@ test("desktop toolbar and saved download folder work without showing a real pick
         }),
         ffmpegStatus: async () => ({ available: true }),
         schedules: async () => [],
-        scan: async () => ({
-          objects: [
-            { key: "report.txt", kind: "object", size: 20, modified: "2026-11-08T00:00:00Z" },
-          ],
-          updated: "2026-11-08T00:00:00Z",
-          history: [{ at: "2026-11-08T00:00:00Z", bytes: 20, count: 1 }],
-        }),
-        duplicates: async () => [],
+        scan: async () => {
+          if (++bucketScans === 1) throw new Error("connect ETIMEDOUT");
+          return {
+            objects: [
+              { key: "report.txt", kind: "object", size: 20, modified: "2026-11-08T00:00:00Z" },
+            ],
+            updated: "2026-11-08T00:00:00Z",
+            history: [{ at: "2026-11-08T00:00:00Z", bytes: 20, count: 1 }],
+          };
+        },
+        duplicates: async () => (++duplicateScans === 1 ? [] : [duplicates]),
+        detail: async (_id: string, key: string) => ({ key, etag: key }),
+        mutate: async (
+          _id: string,
+          changes: { key: string; kind: string; expectedEtag: string }[],
+        ) =>
+          changes.map((change) => ({
+            key: change.key,
+            ok:
+              change.kind === "delete" &&
+              change.key === "one.txt" &&
+              change.expectedEtag === "one.txt",
+          })),
         pickDestination: async () => {
           calls.picks++;
           return "chosen-local-folder";
@@ -219,7 +277,9 @@ test("desktop toolbar and saved download folder work without showing a real pick
   await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = page.getByRole("dialog", { name: "Search files" });
   await expect(search.getByRole("combobox", { name: "Sort files" })).toBeVisible();
+  await search.getByRole("combobox", { name: "Filter files" }).selectOption("image");
   await search.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("button", { name: "report.txt", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const settings = page.getByRole("dialog");
@@ -256,10 +316,22 @@ test("desktop toolbar and saved download folder work without showing a real pick
   await expect(page.getByText("No transfers here")).toBeVisible();
   await page.getByRole("button", { name: "Storage statistics" }).click();
   await page.getByRole("button", { name: "Sync bucket" }).click();
+  await expect(page.getByRole("alert")).toContainText("Check your network");
+  await page.getByRole("button", { name: "Retry sync" }).click();
   await expect(page.getByRole("heading", { name: "Object types" })).toBeVisible();
   await page.getByRole("button", { name: "Extensions", exact: true }).click();
   await page.getByRole("button", { name: "Scan by content" }).click();
   await expect(page.getByText("No duplicate content found")).toBeVisible();
+  await page.getByRole("button", { name: "Scan by content" }).click();
+  await page.getByRole("checkbox", { name: "one.txt" }).check();
+  await page.getByRole("checkbox", { name: "two.txt" }).click();
+  await expect(page.getByRole("checkbox", { name: "two.txt" })).not.toBeChecked();
+  await page.getByRole("button", { name: /Delete selected copies/ }).click();
+  await page
+    .getByRole("dialog", { name: "Delete duplicate copies" })
+    .getByRole("button", { name: "Delete", exact: true })
+    .click();
+  await expect(page.getByText("1 deleted", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Bucket download" }).click();
   await expect(page.getByRole("button", { name: "Enable schedule" })).toBeVisible();
 
@@ -405,4 +477,170 @@ test("loads visible thumbnails in small batches instead of fetching the entire g
         ),
     )
     .toBeGreaterThan(4);
+});
+
+test("narrow zoom keeps navigation visible and shows download finalization separately", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 790, height: 530 });
+  await page.addInitScript(() => {
+    localStorage.setItem("r2client-preferences", JSON.stringify({ zoom: 150 }));
+    const profile = {
+      id: "compact",
+      label: "Narrow workspace fixture",
+      bucket: "compact",
+      accountId: "0".repeat(32),
+      jurisdiction: "default",
+      publicBase: "",
+    };
+    const stage = {
+      id: "upload-source",
+      name: "upload.txt",
+      size: 4,
+      type: "text/plain",
+      modified: 0,
+    };
+    const job = {
+      id: "download",
+      profileId: profile.id,
+      key: "download.txt",
+      direction: "download",
+      state: "running",
+      done: 4,
+      total: 4,
+      created: "2026-11-09T00:00:00Z",
+      updated: "2026-11-09T00:00:01Z",
+    };
+    const jobs = [job];
+    let stages: (typeof stage)[] = [];
+    Object.assign(window, {
+      finishDownload: () => {
+        job.state = "failed";
+        Object.assign(job, { error: "Destination unavailable" });
+      },
+      r2client: {
+        capabilities: { desktop: true, folders: true },
+        api: {
+          snapshot: async () => ({ profiles: [profile], connected: [profile.id], jobs, stages }),
+          index: async () => undefined,
+          list: async () => ({
+            items: [{ key: "file.txt", kind: "object", size: 4, modified: "" }],
+          }),
+          pickSources: async () => {
+            stages = [stage];
+          },
+          upload: async () => {
+            stages = [];
+            jobs.push({
+              ...job,
+              id: "upload",
+              key: stage.name,
+              direction: "upload",
+              state: "queued",
+              done: 0,
+            });
+            return 0;
+          },
+          job: async (id: string, action: string) => {
+            if (id === job.id && action === "resume") job.state = "completed";
+          },
+        },
+      },
+    });
+  });
+  await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "Workspace" });
+  await expect(nav.getByRole("button")).toHaveCount(5);
+  expect(await nav.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+  await page.getByRole("button", { name: "Open sidebar" }).click();
+  await expect(
+    page.getByRole("button", { name: "Narrow workspace fixture Private" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Close sidebar" }).click();
+  await page.getByRole("button", { name: "Select all", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Clear selection" })).toBeVisible();
+  const card = page.locator(".file-card");
+  const check = await card.getByRole("checkbox").boundingBox();
+  const download = await card.getByRole("button", { name: "Download file.txt" }).boundingBox();
+  expect(download!.x).toBeGreaterThan(check!.x + check!.width);
+  const more = card.getByRole("button", { name: "More actions file.txt" });
+  await more.click();
+  await expect(card.getByRole("button", { name: "Copy link", exact: true })).toBeVisible();
+  await more.click();
+  const footer = page.locator(".status-bar");
+  await expect(footer).toBeVisible();
+  expect(await footer.evaluate((el) => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(531);
+  await nav.getByRole("button", { name: "Upload files" }).click();
+  await page.getByRole("button", { name: "Browse files" }).click();
+  await page.getByRole("button", { name: "Start upload" }).click();
+  await expect(nav.getByRole("button", { name: "Transfers" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.getByText("upload.txt", { exact: true })).toBeVisible();
+  await expect(page.getByText("Saving file…")).toBeVisible();
+  const list = page.locator(".transfers-list");
+  expect(await list.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+  await page.evaluate(() => (window as unknown as { finishDownload: () => void }).finishDownload());
+  await expect(page.getByText("Destination unavailable")).toBeVisible();
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(list.getByText("Completed", { exact: true })).toBeVisible();
+});
+
+test("bucket search exposes matching folders and keeps the file menu dismissible", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const profile = { id: "search", label: "Search fixture", bucket: "search-fixture" };
+    const image = { key: "trip.png", kind: "object", size: 8, modified: "2026-11-09T06:00:00Z" };
+    const nested = { ...image, key: "references/trip/01.jpeg" };
+    const folder = { ...image, key: "references/", kind: "folder", size: 0 };
+    Object.assign(window, {
+      r2client: {
+        capabilities: { desktop: true, folders: true },
+        api: {
+          snapshot: async () => ({
+            profiles: [profile],
+            connected: [profile.id],
+            jobs: [],
+            stages: [],
+          }),
+          index: async () => ({ objects: [image, nested], history: [], updated: image.modified }),
+          list: async (_id: string, prefix: string) => ({
+            items: prefix ? [nested] : [folder, image],
+          }),
+        },
+      },
+    });
+  });
+  await page.goto("/");
+  const search = page.getByRole("button", { name: "Search", exact: true });
+  await search.click();
+  let form = page.getByRole("dialog", { name: "Search files" });
+  await form.getByRole("textbox").fill("trip");
+  await form.getByRole("button", { name: "Search" }).click();
+  await expect(page.getByText("Search results: trip")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open folder trip" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /01\.jpeg/ })).toHaveCount(0);
+  const preview = page.getByRole("button", { name: "Preview trip.png" });
+  await preview.click({ button: "right" });
+  await expect(page.getByRole("button", { name: "Save as…" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Save as…" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Open folder trip" }).click();
+  await expect(
+    page.getByRole("navigation", { name: "Folder path" }).getByRole("button", { name: "trip" }),
+  ).toHaveAttribute("aria-current", "location");
+  await expect(page.getByRole("button", { name: "Preview 01.jpeg" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Clear search" })).toHaveCount(0);
+  await page.getByRole("button", { name: "List", exact: true }).click();
+  await expect(page.locator(".list-head")).toContainText("Actions");
+  await expect(page.locator(".file-list .file-name .list-date")).toBeVisible();
+  await page.getByRole("button", { name: "Grid", exact: true }).click();
+  await search.click();
+  form = page.getByRole("dialog", { name: "Search files" });
+  await form.getByRole("textbox").fill("01.jpeg");
+  await form.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Clear search" }).click();
+  await expect(page.getByRole("button", { name: "Preview 01.jpeg" })).toBeVisible();
 });

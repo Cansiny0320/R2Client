@@ -295,6 +295,23 @@ export async function desktopDriver() {
       if (r.canceled || !r.filePaths[0]) return undefined;
       return registerDirectory(r.filePaths[0]);
     },
+    async pickSaveDestination(name) {
+      let suggestedName = "download";
+      try {
+        if (safeRelative(name).length === 1) suggestedName = name;
+      } catch {
+        // The original object key can contain characters unsupported in local file names.
+      }
+      const result = await dialog.showSaveDialog({
+        defaultPath: path.join(app.getPath("downloads"), suggestedName),
+        properties: ["createDirectory"],
+      });
+      if (result.canceled || !result.filePath) return undefined;
+      return {
+        directory: await registerDirectory(path.dirname(result.filePath)),
+        name: path.basename(result.filePath),
+      };
+    },
     async defaultDestination() {
       const root = app.getPath("downloads");
       await mkdir(root, { recursive: true });

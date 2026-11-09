@@ -218,6 +218,28 @@ test("bulk plan rejects collisions and move preserves the source if copy fails",
   assert.equal((await engine.detail("demo", "other.md")).key, "other.md");
   const found = await engine.duplicates("demo", "");
   assert.ok(found.some((group) => group.length === 2 && group.some((x) => x.key === source)));
+  const duplicate = await engine.detail("demo", "documents/test.md");
+  assert.equal(
+    (
+      await engine.mutate("demo", [
+        {
+          kind: "move",
+          key: duplicate.key,
+          target: "documents/renamed.md",
+          expectedEtag: duplicate.etag,
+        },
+      ])
+    )[0]?.ok,
+    true,
+  );
+  await assert.rejects(engine.detail("demo", duplicate.key));
+  const renamed = await engine.detail("demo", "documents/renamed.md");
+  const deleted = await engine.mutate("demo", [
+    { kind: "delete", key: renamed.key, expectedEtag: renamed.etag },
+  ]);
+  assert.equal(deleted[0]?.ok, true);
+  await assert.rejects(engine.detail("demo", renamed.key));
+  assert.equal((await engine.detail("demo", source)).key, source);
   const objs: Item[] = ["a", "b"].map((key) => ({
     key: key + ".md",
     kind: "object",
@@ -362,4 +384,25 @@ test("download completion uses the system destination and only runs once for suc
     "failed",
   ]);
   assert.equal(effects.length, 1);
+});
+
+test("Save as keeps the object key and queues the exact local name only after confirmation", async () => {
+  const driver = memoryDriver(new DemoStore());
+  const engine = await fixtureEngine(driver);
+  const item = await engine.detail("demo", "README.md");
+  let target: { directory: string; name: string } | undefined;
+  driver.pickSaveDestination = async (suggested) => {
+    assert.equal(suggested, "README.md");
+    return target;
+  };
+  assert.equal(await engine.downloadAs("demo", item, false), false);
+  assert.equal((await engine.snapshot()).jobs.length, 0);
+  target = { directory: "chosen-folder", name: "nested/renamed.md" };
+  await assert.rejects(engine.downloadAs("demo", item, false), /Invalid local file name/);
+  target = { directory: "chosen-folder", name: "renamed.md" };
+  assert.equal(await engine.downloadAs("demo", item, false), true);
+  const [job] = (await engine.snapshot()).jobs;
+  assert.equal(job?.key, "README.md");
+  assert.equal(job?.destination, JSON.stringify(["chosen-folder", "renamed.md"]));
+  assert.equal(job?.replace, false);
 });

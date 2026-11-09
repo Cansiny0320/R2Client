@@ -1,6 +1,6 @@
 {
   "name": "@r2client/desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "An open-source desktop client for Cloudflare R2",
   "homepage": "https://github.com/Cansiny0320/R2Client",

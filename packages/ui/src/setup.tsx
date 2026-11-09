@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import type { Connection, SavedAccount } from "@r2client/core";
-import { Modal } from "./common";
+import { connectionFailure, Modal } from "./common";
 import type { Platform, Tr } from "./common";
 
 export function Welcome({ t, start }: { t: Tr; start: () => void }) {
@@ -90,7 +90,7 @@ export function BucketSetup({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [sync, setSync] = useState<"running" | "done" | "failed">("running");
-  const [error, setError] = useState("");
+  const [error, setError] = useState<ReturnType<typeof connectionFailure>>();
   const steps = [
     [
       Cloud,
@@ -144,9 +144,18 @@ export function BucketSetup({
     [t("Region", "区域"), region === "default" ? "auto" : region],
     [t("Public access", "公开访问"), publicAccess ? publicUrl : t("Disabled", "禁用")],
   ];
+  async function syncBucket() {
+    setSync("running");
+    try {
+      await saved();
+      setSync("done");
+    } catch {
+      setSync("failed");
+    }
+  }
   async function save() {
     setBusy(true);
-    setError("");
+    setError(undefined);
     try {
       await p.api.connect({
         id: "",
@@ -164,12 +173,9 @@ export function BucketSetup({
         remember,
       });
       setDone(true);
-      void saved().then(
-        () => setSync("done"),
-        () => setSync("failed"),
-      );
+      void syncBucket();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(connectionFailure(e, t));
     } finally {
       setBusy(false);
     }
@@ -193,10 +199,7 @@ export function BucketSetup({
               ? t("Initial sync in progress…", "初始同步正在进行中…")
               : sync === "done"
                 ? t("Initial sync complete", "初始同步完成")
-                : t(
-                    "Initial sync failed. You can retry from Files.",
-                    "初始同步失败，可以在文件列表重试。",
-                  )}
+                : t("Initial sync failed", "初始同步失败")}
           </div>
           <dl className="wizard-summary">
             {summary.slice(2).map(([label, value]) => (
@@ -206,9 +209,16 @@ export function BucketSetup({
               </div>
             ))}
           </dl>
-          <button className="button primary" onClick={() => void close()}>
-            {t("Return to list", "返回列表")}
-          </button>
+          <div className="row gap wizard-result-actions">
+            {sync === "failed" && (
+              <button className="button" onClick={() => void syncBucket()}>
+                {t("Retry sync", "重试同步")}
+              </button>
+            )}
+            <button className="button primary" onClick={() => void close()}>
+              {t("Return to list", "返回列表")}
+            </button>
+          </div>
         </section>
       ) : (
         <div className="wizard-content">
@@ -236,7 +246,7 @@ export function BucketSetup({
               if (step === 4) void save();
               else {
                 setStep(step + 1);
-                setError("");
+                setError(undefined);
               }
             }}
           >
@@ -477,8 +487,20 @@ export function BucketSetup({
                   </dl>
                   {error && (
                     <div role="alert" className="notice error">
-                      {error}
+                      {error.message}
                     </div>
+                  )}
+                  {error?.credentials && (
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={() => {
+                        setStep(1);
+                        setError(undefined);
+                      }}
+                    >
+                      {t("Edit credentials", "修改凭据")}
+                    </button>
                   )}
                   <button className="button primary" disabled={busy}>
                     {busy ? t("Validating…", "正在验证…") : t("Validate and save", "验证并保存")}
@@ -493,7 +515,7 @@ export function BucketSetup({
                 disabled={!step || busy}
                 onClick={() => {
                   setStep(step - 1);
-                  setError("");
+                  setError(undefined);
                 }}
               >
                 <ArrowLeft size={15} /> {t("Previous step", "上一步")}

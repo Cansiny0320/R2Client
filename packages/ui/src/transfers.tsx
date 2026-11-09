@@ -481,16 +481,29 @@ export function TransfersPanel({
   changed: () => Promise<void>;
 }) {
   const [filter, setFilter] = useState<Job["state"] | "all">("all"),
-    [selected, setSelected] = useState<Set<string>>(new Set());
+    [selected, setSelected] = useState<Set<string>>(new Set()),
+    [pending, setPending] = useState<Set<string>>(new Set());
   const file = useRef<HTMLInputElement>(null),
     attaching = useRef("");
   const statuses = status(t),
     jobs = snapshot.jobs.filter((j) => filter === "all" || j.state === filter);
+  const selectedUploads = jobs.filter(
+    (j) => selected.has(j.id) && j.state === "completed" && j.direction === "upload",
+  );
   async function act(job: Job, action: Parameters<Platform["api"]["job"]>[1]) {
-    await run(async () => {
-      await p.api.job(job.id, action);
-      await changed();
-    });
+    setPending((old) => new Set(old).add(job.id));
+    try {
+      await run(async () => {
+        await p.api.job(job.id, action);
+        await changed();
+      });
+    } finally {
+      setPending((old) => {
+        const next = new Set(old);
+        next.delete(job.id);
+        return next;
+      });
+    }
   }
   function attach(job: Job) {
     attaching.current = job.id;
@@ -500,11 +513,7 @@ export function TransfersPanel({
     await run(
       async () => {
         const urls = await Promise.all(
-          snapshot.jobs
-            .filter(
-              (j) => selected.has(j.id) && j.state === "completed" && j.direction === "upload",
-            )
-            .map((j) => p.api.links(j.profileId, j.key, 3600, "signed")),
+          selectedUploads.map((j) => p.api.links(j.profileId, j.key, 3600, "signed")),
         );
         if (!urls.length) throw new Error("Select completed uploads first");
         await copyText(p, urls.join("\n"));
@@ -522,7 +531,11 @@ export function TransfersPanel({
           </p>
         </div>
         <div className="row gap">
-          <button className="button" disabled={!selected.size} onClick={() => void links()}>
+          <button
+            className="button"
+            disabled={!selectedUploads.length}
+            onClick={() => void links()}
+          >
             <Clipboard size={15} /> {t("Copy links", "复制链接")}
           </button>
           <button
@@ -544,7 +557,11 @@ export function TransfersPanel({
             <button
               key={x}
               className={"button " + (x === filter ? "selected" : "")}
-              onClick={() => setFilter(x)}
+              aria-pressed={x === filter}
+              onClick={() => {
+                setFilter(x);
+                setSelected(new Set());
+              }}
             >
               {x === "all" ? t("All", "全部") : statuses[x]}{" "}
               <span className="count">
@@ -574,6 +591,12 @@ export function TransfersPanel({
             const Icon = j.direction === "upload" ? ArrowUpToLine : ArrowDownToLine;
             const running = j.state === "running" || j.state === "queued",
               restorable = j.state === "paused" || j.state === "failed";
+            const finishing =
+              j.direction === "download" &&
+              j.state === "running" &&
+              j.total > 0 &&
+              j.done >= j.total;
+            const changing = pending.has(j.id);
             const seconds = Math.max(1, (Date.parse(j.updated) - Date.parse(j.created)) / 1000);
             return (
               <div className="transfer-row" key={j.id}>
@@ -609,19 +632,31 @@ export function TransfersPanel({
                   />
                   <small>
                     {byteLabel(j.done)} / {byteLabel(j.total)}
-                    {j.state === "running" ? " · " + byteLabel(j.done / seconds) + "/s" : ""}
+                    {j.state === "running" && !finishing
+                      ? " · " + byteLabel(j.done / seconds) + "/s"
+                      : ""}
                   </small>
                 </div>
-                <span className={"status-pill " + j.state}>{statuses[j.state]}</span>
+                <span className={"status-pill " + j.state}>
+                  {finishing ? t("Saving file…", "正在保存文件…") : statuses[j.state]}
+                </span>
                 <div className="row gap transfer-actions">
                   {running && (
-                    <IconButton label={t("Pause", "暂停")} onClick={() => void act(j, "pause")}>
+                    <IconButton
+                      label={t("Pause", "暂停")}
+                      disabled={changing}
+                      onClick={() => void act(j, "pause")}
+                    >
                       <Pause size={16} />
                     </IconButton>
                   )}
                   {restorable && (
                     <>
-                      <IconButton label={t("Resume", "继续")} onClick={() => void act(j, "resume")}>
+                      <IconButton
+                        label={j.state === "failed" ? t("Retry", "重试") : t("Resume", "继续")}
+                        disabled={changing}
+                        onClick={() => void act(j, "resume")}
+                      >
                         <Play size={16} />
                       </IconButton>
                       {j.direction === "upload" ? (
@@ -633,8 +668,23 @@ export function TransfersPanel({
                         </IconButton>
                       ) : (
                         <IconButton
-                          label={t("Reauthorize download folder", "重新授权下载目录")}
-                          onClick={() => void run(() => p.api.pickDestination())}
+                          label={t("Select the original download folder", "选择原下载目录")}
+                          onClick={() =>
+                            void run(async () => {
+                              const destination = await p.api.pickDestination();
+                              if (
+                                destination &&
+                                j.destination &&
+                                destination !== JSON.parse(j.destination)[0]
+                              )
+                                throw new Error(
+                                  t(
+                                    "Select the folder originally used for this download.",
+                                    "请选择此下载任务原来使用的目录。",
+                                  ),
+                                );
+                            })
+                          }
                         >
                           <FolderOpen size={16} />
                         </IconButton>
@@ -671,6 +721,7 @@ export function TransfersPanel({
                   {["completed", "cancelled"].includes(j.state) ? (
                     <IconButton
                       label={t("Remove record", "移除记录")}
+                      disabled={changing}
                       onClick={() => void act(j, "remove")}
                     >
                       <Trash2 size={16} />
@@ -678,6 +729,7 @@ export function TransfersPanel({
                   ) : (
                     <IconButton
                       label={t("Cancel transfer", "取消传输")}
+                      disabled={changing}
                       onClick={() => void act(j, "cancel")}
                     >
                       <X size={16} />

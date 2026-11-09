@@ -8,21 +8,25 @@ import {
   Copy,
   Ellipsis,
   FolderInput,
+  FolderOpen,
   FolderPlus,
   Grid2X2,
   Link2,
   List,
+  Minus,
   Pencil,
+  Plus,
   QrCode,
   RefreshCw,
   Search,
   Settings2,
   Trash2,
+  X,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { byteLabel, formatLink, joined, nameOf, objectCategory, renamePlan } from "@r2client/core";
 import type { Detail, Index, Item, Mutation, Outcome, Profile, RenameRule } from "@r2client/core";
-import { dateLabel, Empty, FileIcon, IconButton, Modal } from "./common";
+import { connectionFailure, dateLabel, Empty, FileIcon, IconButton, Modal } from "./common";
 import type { Platform, Preferences, Tr } from "./common";
 import { copyText, ShareDialog } from "./sharing";
 
@@ -155,6 +159,7 @@ function Preview({
   onCopy,
   onView,
   onDownload,
+  onDownloadTo,
   onRename,
   onDelete,
   onNavigate,
@@ -168,6 +173,7 @@ function Preview({
   onCopy: () => void;
   onView: () => void;
   onDownload: () => void;
+  onDownloadTo?: () => void;
   onRename: () => void;
   onDelete: () => void;
   onNavigate?: (step: -1 | 1) => void;
@@ -193,6 +199,7 @@ function Preview({
   }, [onNavigate]);
   const toolbar = [
     [ArrowDownToLine, t("Download", "下载"), onDownload],
+    [FolderOpen, t("Save as…", "另存为…"), onDownloadTo],
     [Link2, t("Copy link", "复制链接"), onCopy],
     [QrCode, t("Share and QR code", "分享与二维码"), onShare],
     [ArrowUpRight, t("View in browser", "在浏览器中查看"), onView],
@@ -212,11 +219,14 @@ function Preview({
       }
       pageActions={
         <div className="preview-actions">
-          {toolbar.map(([Icon, label, action]) => (
-            <IconButton key={label} label={label} onClick={action}>
-              <Icon size={17} />
-            </IconButton>
-          ))}
+          {toolbar.map(
+            ([Icon, label, action]) =>
+              action && (
+                <IconButton key={label} label={label} onClick={action}>
+                  <Icon size={17} />
+                </IconButton>
+              ),
+          )}
         </div>
       }
     >
@@ -260,7 +270,8 @@ function PreviewContent({
     [url, setUrl] = useState(""),
     [text, setText] = useState(""),
     [error, setError] = useState(""),
-    [loading, setLoading] = useState(true);
+    [loading, setLoading] = useState(true),
+    [zoom, setZoom] = useState(100);
   const category = objectCategory(item.key);
   useEffect(() => {
     let active = true;
@@ -299,11 +310,39 @@ function PreviewContent({
     <div className="preview-content">
       <div className="media-preview">
         {url && category === "image" ? (
-          <img
-            src={url}
-            alt={nameOf(item.key)}
-            onError={() => setError(t("Could not load this image", "无法加载此图片"))}
-          />
+          <div className="image-preview">
+            <div className="row gap image-zoom">
+              <IconButton
+                label={t("Zoom out", "缩小")}
+                disabled={zoom === 25}
+                onClick={() => setZoom(zoom - 25)}
+              >
+                <Minus size={16} />
+              </IconButton>
+              <button
+                className="button"
+                aria-label={t("Reset zoom", "重置缩放")}
+                onClick={() => setZoom(100)}
+              >
+                {zoom}%
+              </button>
+              <IconButton
+                label={t("Zoom in", "放大")}
+                disabled={zoom === 300}
+                onClick={() => setZoom(zoom + 25)}
+              >
+                <Plus size={16} />
+              </IconButton>
+            </div>
+            <div className="image-preview-scroll">
+              <img
+                src={url}
+                alt={nameOf(item.key)}
+                style={{ width: zoom + "%", height: zoom + "%" }}
+                onError={() => setError(t("Could not load this image", "无法加载此图片"))}
+              />
+            </div>
+          </div>
         ) : url && category === "video" ? (
           <video src={url} controls preload="metadata" />
         ) : url && category === "audio" ? (
@@ -601,7 +640,7 @@ export function Files({
     [error, setError] = useState("");
   const [query, setQuery] = useState(""),
     [searchOpen, setSearchOpen] = useState(false),
-    [draft, setDraft] = useState(""),
+    [draft, setDraft] = useState({ query: "", category: "", sort: "newest" as Sort }),
     [sort, setSort] = useState<Sort>("newest"),
     [category, setCategory] = useState("");
   const [selected, setSelected] = useState<Map<string, Item>>(new Map()),
@@ -609,7 +648,24 @@ export function Files({
     [share, setShare] = useState<{ item: Item; previewLink?: string }>(),
     [action, setAction] = useState<Action>();
   const [menu, setMenu] = useState<string>(),
-    [syncing, setSyncing] = useState(false);
+    [syncing, setSyncing] = useState(false),
+    [syncError, setSyncError] = useState("");
+  useEffect(() => {
+    if (!menu) return;
+    const outside = (event: PointerEvent) => {
+      if (event.target instanceof Element && !event.target.closest(".file-actions"))
+        setMenu(undefined);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenu(undefined);
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [menu]);
   useEffect(() => {
     setLocal(0);
     setSelected(new Map());
@@ -660,27 +716,48 @@ export function Files({
       : directory?.prefix === prefix
         ? directory.items
         : emptyDirectory;
+  const isIndexedSearch = !!(query && index);
   const sorted = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return source
+    const matches = new Map<string, Item>();
+    for (const item of source) {
+      if (
+        !isIndexedSearch ||
+        (q.includes("/") ? item.key : nameOf(item.key)).toLowerCase().includes(q)
+      ) {
+        matches.set(item.key, item);
+      }
+      if (!isIndexedSearch || q.includes("/") || item.kind !== "object") continue;
+      const parts = item.key.split("/").slice(0, -1);
+      let folder = "";
+      for (const part of parts) {
+        folder += part + "/";
+        if (
+          part.toLowerCase().includes(q) &&
+          (matches.get(folder)?.modified ?? "") <= item.modified
+        ) {
+          matches.set(folder, { key: folder, kind: "folder", modified: item.modified, size: 0 });
+        }
+      }
+    }
+    return [...matches.values()]
       .filter(
         (x) =>
-          (!q || x.key.toLowerCase().includes(q)) &&
+          (isIndexedSearch || !q || x.key.toLowerCase().includes(q)) &&
           (!category || x.kind === "folder" || objectCategory(x.key) === category),
       )
       .sort((a, b) => {
-        if (a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
+        if (!isIndexedSearch && a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
         if (sort === "size") return b.size - a.size;
         if (sort === "name") return a.key.localeCompare(b.key);
         return sort === "newest"
           ? b.modified.localeCompare(a.modified)
           : a.modified.localeCompare(b.modified);
       });
-  }, [source, query, category, sort]);
+  }, [source, query, category, sort, isIndexedSearch]);
   const localMax = Math.max(1, Math.ceil(sorted.length / prefs.pageSize)),
     currentPage = Math.min(local, localMax - 1),
-    shown = sorted.slice(currentPage * prefs.pageSize, (currentPage + 1) * prefs.pageSize),
-    isIndexedSearch = !!(query && index);
+    shown = sorted.slice(currentPage * prefs.pageSize, (currentPage + 1) * prefs.pageSize);
   const all = shown.length > 0 && shown.every((x) => selected.has(x.key));
   const choose = (item: Item) =>
     setSelected((old) => {
@@ -699,20 +776,30 @@ export function Files({
     });
   async function sync() {
     setSyncing(true);
-    const v = await run(() => p.api.scan(profile.id), t("Bucket synced", "存储桶已同步"));
-    if (v) {
-      setIndex(v);
+    setSyncError("");
+    try {
+      setIndex(await p.api.scan(profile.id));
       refresh((x) => x + 1);
+    } catch (e) {
+      setSyncError(connectionFailure(e, t).message);
+    } finally {
+      setSyncing(false);
     }
-    setSyncing(false);
   }
-  async function download(items: Item[]) {
+  async function download(items: Item[], chooseFolder = false) {
     if (!items.length) return;
     await run(async () => {
-      await p.api.download(profile.id, items, prefs.downloadFolder, prefix, prefs.replace, {
-        completion: prefs.downloadCompletion,
-        parallel: prefs.downloadParallel,
-      });
+      const options = { completion: prefs.downloadCompletion, parallel: prefs.downloadParallel };
+      const file = items.length === 1 && items[0]?.kind === "object" ? items[0] : undefined;
+      if (chooseFolder && file) {
+        if (await p.api.downloadAs(profile.id, file, prefs.replace, options)) {
+          notify(t("Added to transfers", "已加入传输队列"));
+        }
+        return;
+      }
+      const folder = chooseFolder ? await p.api.pickDestination() : prefs.downloadFolder;
+      if (chooseFolder && !folder) return;
+      await p.api.download(profile.id, items, folder ?? "", prefix, prefs.replace, options);
       notify(t("Added to transfers", "已加入传输队列"));
     });
   }
@@ -734,6 +821,15 @@ export function Files({
     setAction(action);
   }
   const crumbs = prefix.split("/").filter(Boolean);
+  const searchActive = !!query || !!category || sort !== "newest";
+  function applySearch(value: typeof draft) {
+    setQuery(value.query.trim());
+    setCategory(value.category);
+    setSort(value.sort);
+    setLocal(0);
+    setSelected(new Map());
+    setSearchOpen(false);
+  }
   return (
     <section
       className="files-section"
@@ -745,25 +841,33 @@ export function Files({
       }}
     >
       <div className="file-toolbar">
-        <div className="breadcrumbs">
-          <button className="crumb" onClick={() => go("")}>
+        <nav className="breadcrumbs" aria-label={t("Folder path", "文件夹路径")}>
+          <button
+            className="crumb"
+            aria-current={!prefix ? "location" : undefined}
+            onClick={() => go("")}
+          >
             {t("All files", "所有文件", "すべてのファイル", "모든 파일")}
           </button>
           {crumbs.map((name, i) => (
             <span key={i}>
               <ChevronRight size={13} />
-              <button className="crumb" onClick={() => go(crumbs.slice(0, i + 1).join("/") + "/")}>
+              <button
+                className="crumb"
+                aria-current={i === crumbs.length - 1 ? "location" : undefined}
+                onClick={() => go(crumbs.slice(0, i + 1).join("/") + "/")}
+              >
                 {name}
               </button>
             </span>
           ))}
-        </div>
+        </nav>
         <div className="toolbar-actions">
           <button
-            className={"button " + (query ? "selected" : "")}
+            className={"button " + (searchActive ? "selected" : "")}
             aria-haspopup="dialog"
             onClick={() => {
-              setDraft(query);
+              setDraft({ query, category, sort });
               setSearchOpen(true);
             }}
           >
@@ -824,34 +928,42 @@ export function Files({
           </IconButton>
         </div>
       </div>
+      {query && (
+        <div className="searchbar">
+          <span>
+            {t("Search results:", "搜索结果：")} <strong>{query}</strong>
+          </span>
+          <IconButton
+            label={t("Clear search", "清除搜索")}
+            onClick={() => applySearch({ ...draft, query: "", category, sort })}
+          >
+            <X size={15} />
+          </IconButton>
+        </div>
+      )}
       {searchOpen && (
         <Modal open title={t("Search files", "搜索文件")} onClose={() => setSearchOpen(false)}>
           <form
             className="dialog-body stack"
             onSubmit={async (event) => {
               event.preventDefault();
-              const term = draft.trim();
+              const term = draft.query.trim();
               if (term && !index && connected) await sync();
-              setQuery(term);
-              setLocal(0);
-              setSearchOpen(false);
+              applySearch(draft);
             }}
           >
             <input
               autoFocus
               aria-label={t("Search objects", "搜索对象")}
               placeholder={t("Enter a filename to search…", "输入文件名进行搜索…")}
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
+              value={draft.query}
+              onChange={(event) => setDraft({ ...draft, query: event.target.value })}
             />
             <div className="search-options">
               <select
                 aria-label={t("Filter files", "筛选文件")}
-                value={category}
-                onChange={(e) => {
-                  setCategory(e.target.value);
-                  setLocal(0);
-                }}
+                value={draft.category}
+                onChange={(e) => setDraft({ ...draft, category: e.target.value })}
               >
                 <option value="">{t("All types", "所有类型")}</option>
                 {["image", "video", "audio", "pdf", "text", "file"].map((x) => (
@@ -862,11 +974,8 @@ export function Files({
               </select>
               <select
                 aria-label={t("Sort files", "文件排序")}
-                value={sort}
-                onChange={(e) => {
-                  setSort(e.target.value as Sort);
-                  setLocal(0);
-                }}
+                value={draft.sort}
+                onChange={(e) => setDraft({ ...draft, sort: e.target.value as Sort })}
               >
                 <option value="newest">{t("Newest first", "最新优先")}</option>
                 <option value="oldest">{t("Oldest first", "最早优先")}</option>
@@ -875,21 +984,16 @@ export function Files({
               </select>
             </div>
             <div className="row end gap">
-              {query && (
+              {searchActive && (
                 <button
                   type="button"
                   className="button"
-                  onClick={() => {
-                    setQuery("");
-                    setCategory("");
-                    setLocal(0);
-                    setSearchOpen(false);
-                  }}
+                  onClick={() => applySearch({ query: "", category: "", sort: "newest" })}
                 >
                   {t("Clear search", "清除搜索")}
                 </button>
               )}
-              <button type="submit" className="button primary" disabled={syncing || !draft.trim()}>
+              <button type="submit" className="button primary" disabled={syncing}>
                 <Search size={15} /> {t("Search", "搜索")}
               </button>
             </div>
@@ -915,6 +1019,12 @@ export function Files({
                   </IconButton>
                 );
               })}
+            <IconButton
+              label={t("Clear selection", "清除选择")}
+              onClick={() => setSelected(new Map())}
+            >
+              <X size={15} />
+            </IconButton>
           </div>
         </div>
       )}
@@ -944,10 +1054,9 @@ export function Files({
             {prefs.view === "list" && (
               <div className="list-head">
                 <span />
-                {t("Name", "名称")}
+                {t("File name", "文件名")}
                 <span>{t("Size", "大小")}</span>
-                <span>{t("Modified", "最后更新")}</span>
-                <span />
+                <span className="list-action-heading">{t("Actions", "操作")}</span>
               </div>
             )}
             {shown.map((item) => {
@@ -997,7 +1106,14 @@ export function Files({
                     title={item.key}
                   >
                     {prefs.view === "list" && <FileIcon item={item} size={18} />}
-                    <span>{isIndexedSearch ? item.key : nameOf(item.key)}</span>
+                    <span>
+                      <span>
+                        {isIndexedSearch && item.kind === "object" ? item.key : nameOf(item.key)}
+                      </span>
+                      {prefs.view === "list" && item.modified && (
+                        <small className="list-date">{dateLabel(item.modified)}</small>
+                      )}
+                    </span>
                   </button>
                   {prefs.view === "grid" ? (
                     <div className="file-data">
@@ -1005,12 +1121,9 @@ export function Files({
                       <span>{item.kind === "object" ? byteLabel(item.size) : ""}</span>
                     </div>
                   ) : (
-                    <>
-                      <span className="muted">
-                        {item.kind === "object" ? byteLabel(item.size) : "—"}
-                      </span>
-                      <span className="muted">{dateLabel(item.modified)}</span>
-                    </>
+                    <span className="muted">
+                      {item.kind === "object" ? byteLabel(item.size) : "—"}
+                    </span>
                   )}
                   <div className="file-actions">
                     {item.kind === "object" && (
@@ -1022,18 +1135,21 @@ export function Files({
                           <ArrowDownToLine size={15} />
                         </IconButton>
                         <IconButton
+                          className="wide-card-action"
                           label={t("Copy link", "复制链接") + " " + nameOf(item.key)}
                           onClick={() => void copyObjectLink(item)}
                         >
                           <Link2 size={15} />
                         </IconButton>
                         <IconButton
+                          className="wide-card-action"
                           label={labels(t).rename + " " + nameOf(item.key)}
                           onClick={() => singleAction(item, "rename")}
                         >
                           <Pencil size={15} />
                         </IconButton>
                         <IconButton
+                          className="wide-card-action"
                           label={labels(t).delete + " " + nameOf(item.key)}
                           onClick={() => singleAction(item, "delete")}
                         >
@@ -1050,6 +1166,17 @@ export function Files({
                     </IconButton>
                     {menu === item.key && (
                       <div className="item-menu">
+                        {item.kind === "object" && (
+                          <button
+                            className="compact-card-action"
+                            onClick={() => {
+                              setMenu(undefined);
+                              void copyObjectLink(item);
+                            }}
+                          >
+                            <Link2 size={15} /> {t("Copy link", "复制链接")}
+                          </button>
+                        )}
                         {item.kind === "object" && (
                           <button
                             onClick={() => {
@@ -1069,6 +1196,19 @@ export function Files({
                           <ArrowDownToLine size={15} />
                           {t("Download", "下载")}
                         </button>
+                        {p.capabilities.folders && (
+                          <button
+                            onClick={() => {
+                              setMenu(undefined);
+                              void download([item], true);
+                            }}
+                          >
+                            <FolderOpen size={15} />{" "}
+                            {item.kind === "object"
+                              ? t("Save as…", "另存为…")
+                              : t("Download to…", "下载到…")}
+                          </button>
+                        )}
                         {(["copy", "move", "rename", "metadata", "delete"] as const)
                           .filter((a) => a !== "metadata" || item.kind === "object")
                           .map((a) => {
@@ -1096,6 +1236,16 @@ export function Files({
           </div>
         )}
       </div>
+      {syncError && (
+        <div className="notice error file-sync-error row gap" role="alert">
+          <span>
+            {t("Sync failed.", "同步失败。")} {syncError}
+          </span>
+          <button className="button" onClick={() => void sync()}>
+            {t("Retry sync", "重试同步")}
+          </button>
+        </div>
+      )}
       <footer className="status-bar">
         <div className="row gap">
           <span className={"status-dot " + (error ? "status-error" : "")} />
@@ -1156,6 +1306,7 @@ export function Files({
           onCopy={() => void copyObjectLink(preview)}
           onView={() => void run(async () => p.api.openExternal(await previewLink(preview)))}
           onDownload={() => void download([preview])}
+          onDownloadTo={p.capabilities.folders ? () => void download([preview], true) : undefined}
           onRename={() => singleAction(preview, "rename")}
           onDelete={() => singleAction(preview, "delete")}
           onNavigate={

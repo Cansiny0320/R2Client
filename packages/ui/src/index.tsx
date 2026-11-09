@@ -9,7 +9,6 @@ import {
   Menu,
   Plus,
   Settings,
-  ShieldCheck,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -65,7 +64,7 @@ export function Workspace({ platform: p }: { platform: Platform }) {
   const [bucket, setBucket] = useState(""),
     [tab, setTab] = useState<Tab>("files"),
     [prefix, setPrefix] = useState(""),
-    [index, setIndex] = useState<Index>();
+    [indexes, setIndexes] = useState<Record<string, Index>>({});
   const [settings, setSettings] = useState(false),
     [connection, setConnection] = useState<Profile | null>(),
     [remove, setRemove] = useState<Profile>(),
@@ -76,6 +75,19 @@ export function Workspace({ platform: p }: { platform: Platform }) {
     [dragging, setDragging] = useState(false);
   const [sort, setSort] = useState<"manual" | "name" | "size" | "updated">("manual");
   const [known, setKnown] = useState<Record<string, { bytes: number; updated: string }>>({});
+  const { prefs, change } = usePreferences();
+  const t = translator(prefs.language),
+    names = tabStrings(t);
+  const profile =
+    data.profiles.find((x) => x.id === bucket) ??
+    data.profiles.find((x) => data.connected.includes(x.id)) ??
+    data.profiles[0];
+  const index = profile && indexes[profile.id];
+  const updateIndex = useCallback((id: string, value: Index) => {
+    setIndexes((old) =>
+      old[id] && old[id].updated >= value.updated ? old : { ...old, [id]: value },
+    );
+  }, []);
   const profileIds = data.profiles.map((p) => p.id).join(",");
   useEffect(() => {
     let active = true;
@@ -104,13 +116,6 @@ export function Workspace({ platform: p }: { platform: Platform }) {
       active = false;
     };
   }, [p, profileIds, sort, index?.updated]);
-  const { prefs, change } = usePreferences();
-  const t = translator(prefs.language),
-    names = tabStrings(t);
-  const profile =
-    data.profiles.find((x) => x.id === bucket) ??
-    data.profiles.find((x) => data.connected.includes(x.id)) ??
-    data.profiles[0];
   const pull = useCallback(async () => {
     const snap = await p.api.snapshot();
     setData((old) => (JSON.stringify(old) === JSON.stringify(snap) ? old : snap));
@@ -153,19 +158,19 @@ export function Workspace({ platform: p }: { platform: Platform }) {
     return () => clearInterval(timer);
   }, [pull]);
   useEffect(() => {
-    setIndex(undefined);
     if (!profile) return;
+    const { id } = profile;
     let live = true;
     void p.api
-      .index(profile.id)
+      .index(id)
       .then((v) => {
-        if (live) setIndex(v);
+        if (live && v) updateIndex(id, v);
       })
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, [p, profile?.id]);
+  }, [p, profile?.id, updateIndex]);
   useEffect(() => {
     document.documentElement.lang = prefs.language === "zh" ? "zh-CN" : prefs.language;
   }, [prefs.language]);
@@ -200,7 +205,9 @@ export function Workspace({ platform: p }: { platform: Platform }) {
           <BucketSetup
             p={p}
             t={t}
-            accounts={data.accounts ?? data.profiles.filter((entry) => data.connected.includes(entry.id))}
+            accounts={
+              data.accounts ?? data.profiles.filter((entry) => data.connected.includes(entry.id))
+            }
             linkedAccounts={data.profiles.map((entry) => entry.savedAccountId ?? entry.id)}
             forgetAccount={async (id) => {
               await p.api.forgetAccount(id);
@@ -217,7 +224,7 @@ export function Workspace({ platform: p }: { platform: Platform }) {
               if (id) {
                 select(id);
                 const scanned = await p.api.scan(id);
-                setIndex(scanned);
+                updateIndex(id, scanned);
               }
             }}
           />
@@ -416,6 +423,7 @@ export function Workspace({ platform: p }: { platform: Platform }) {
                 type="button"
                 key={id}
                 className={tab === id ? "current" : ""}
+                aria-current={tab === id ? "page" : undefined}
                 onClick={() => setTab(id)}
               >
                 <Icon size={16} />
@@ -426,13 +434,6 @@ export function Workspace({ platform: p }: { platform: Platform }) {
               </button>
             ))}
           </nav>
-          {p.capabilities.desktop && (
-            <ShieldCheck
-              className="desktop-indicator"
-              aria-label={t("Desktop", "桌面端")}
-              size={17}
-            />
-          )}
         </header>
         {!ready ? (
           <Empty label={startup || t("Loading…", "正在加载…")} />
@@ -452,7 +453,7 @@ export function Workspace({ platform: p }: { platform: Platform }) {
             upload={() => setTab("upload")}
             connect={() => setConnection(profile)}
             index={index}
-            setIndex={setIndex}
+            setIndex={(value) => updateIndex(profile.id, value)}
           />
         ) : tab === "files" ? (
           <Empty
@@ -483,19 +484,22 @@ export function Workspace({ platform: p }: { platform: Platform }) {
         )}
         {ready && tab === "statistics" && (
           <Statistics
+            key={profile?.id}
             p={p}
             profile={profile}
             jobs={data.jobs}
             index={index}
-            setIndex={setIndex}
+            setIndex={(value) => profile && updateIndex(profile.id, value)}
+            connected={current}
             t={t}
-            run={run}
           />
         )}
         {ready && tab === "extensions" && (
           <Extensions
+            key={profile?.id}
             p={p}
             profile={profile}
+            connected={current}
             prefix={prefix}
             t={t}
             run={run}

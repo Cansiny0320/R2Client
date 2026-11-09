@@ -12,7 +12,7 @@ import {
 import { useEffect, useState } from "react";
 import { byteLabel, downloadConcurrency, objectCategory, uploadTuning } from "@r2client/core";
 import type { Connection, Index, Item, Job, Profile, Schedule } from "@r2client/core";
-import { dateLabel, Empty, Modal } from "./common";
+import { connectionFailure, dateLabel, Empty, Modal } from "./common";
 import { MediaRules } from "./media-settings";
 import type { Platform, Preferences, Tr } from "./common";
 type Run = <T>(operation: () => Promise<T>, success?: string) => Promise<T | undefined>;
@@ -23,24 +23,30 @@ export function Statistics({
   index,
   jobs,
   setIndex,
+  connected,
   t,
-  run,
 }: {
   p: Platform;
   profile?: Profile;
   index?: Index;
   jobs: Job[];
   setIndex: (v: Index) => void;
+  connected: boolean;
   t: Tr;
-  run: Run;
 }) {
   const [loading, setLoading] = useState(false);
+  const [syncError, setSyncError] = useState("");
   async function scan() {
     if (!profile) return;
     setLoading(true);
-    const result = await run(() => p.api.scan(profile.id));
-    if (result) setIndex(result);
-    setLoading(false);
+    setSyncError("");
+    try {
+      setIndex(await p.api.scan(profile.id));
+    } catch (e) {
+      setSyncError(connectionFailure(e, t).message);
+    } finally {
+      setLoading(false);
+    }
   }
   const objects = index?.objects.filter((x) => !x.key.endsWith("/")) ?? [],
     used = objects.reduce((a, b) => a + b.size, 0);
@@ -70,12 +76,22 @@ export function Statistics({
         </div>
         <button
           className="button primary"
-          disabled={!profile || loading}
+          disabled={!connected || loading}
           onClick={() => void scan()}
         >
-          <RefreshCw className={loading ? "spin" : ""} size={15} /> {t("Sync bucket", "同步存储桶")}
+          <RefreshCw className={loading ? "spin" : ""} size={15} />{" "}
+          {loading
+            ? t("Syncing…", "正在同步…")
+            : syncError
+              ? t("Retry sync", "重试同步")
+              : t("Sync bucket", "同步存储桶")}
         </button>
       </header>
+      {syncError && (
+        <div className="notice error" role="alert">
+          {syncError}
+        </div>
+      )}
       {!index ? (
         <Empty label={t("Sync a bucket to see its storage statistics", "同步存储桶后查看统计")} />
       ) : (
@@ -161,6 +177,7 @@ export function Statistics({
 export function Extensions({
   p,
   profile,
+  connected,
   prefix,
   t,
   run,
@@ -169,6 +186,7 @@ export function Extensions({
 }: {
   p: Platform;
   profile?: Profile;
+  connected: boolean;
   prefix: string;
   t: Tr;
   run: Run;
@@ -183,7 +201,12 @@ export function Extensions({
   const [folder, setFolder] = useState(""),
     [schedule, setSchedule] = useState<Schedule>(),
     [minutes, setMinutes] = useState(60),
-    [confirm, setConfirm] = useState(false);
+    [confirm, setConfirm] = useState(false),
+    [deleting, setDeleting] = useState(false),
+    [deleteError, setDeleteError] = useState(""),
+    [queuing, setQueuing] = useState(false);
+  const folderScope = scope.trim().replace(/^\/+|\/+$/g, "");
+  const scopePrefix = folderScope ? folderScope + "/" : "";
   useEffect(() => {
     setScope(prefix);
     setGroups(undefined);
@@ -195,20 +218,20 @@ export function Extensions({
     void p.api
       .schedules()
       .then((v) => {
-        if (live) setSchedule(v.find((s) => s.profileId === profile.id && s.prefix === scope));
+        if (live)
+          setSchedule(v.find((s) => s.profileId === profile.id && s.prefix === scopePrefix));
       })
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, [p, profile?.id, scope]);
-  const normalize = () =>
-    scope.trim().replace(/^\/+|\/+$/g, "") + (scope.trim().replace(/^\/+|\/+$/g, "") ? "/" : "");
+  }, [p, profile?.id, scopePrefix]);
   async function scan() {
     if (!profile) return;
     setScanning(true);
+    setGroups(undefined);
     setChecked(new Set());
-    const r = await run(() => p.api.duplicates(profile.id, normalize()));
+    const r = await run(() => p.api.duplicates(profile.id, scopePrefix));
     if (r) setGroups(r);
     setScanning(false);
   }
@@ -223,7 +246,9 @@ export function Extensions({
   async function deleteDuplicates() {
     if (!profile) return;
     const selected = groups?.flat().filter((x) => checked.has(x.key)) ?? [];
-    const r = await run(async () => {
+    setDeleting(true);
+    setDeleteError("");
+    try {
       for (const group of groups ?? []) {
         if (!group.some((x) => checked.has(x.key))) continue;
         const survivor = group.find((x) => !checked.has(x.key));
@@ -232,39 +257,51 @@ export function Extensions({
           !survivor.etag ||
           (await p.api.detail(profile.id, survivor.key)).etag !== survivor.etag
         )
-          throw new Error("A retained copy changed. Scan again before deleting.");
+          throw new Error(
+            t(
+              "A retained copy changed. Scan again before deleting.",
+              "要保留的副本已变化，请重新扫描后再删除。",
+            ),
+          );
       }
-      return p.api.mutate(
+      const r = await p.api.mutate(
         profile.id,
         selected.map((x) => ({ kind: "delete", key: x.key, expectedEtag: x.etag })),
       );
-    });
-    if (!r) return;
-    const ok = new Set(r.filter((x) => x.ok).map((x) => x.key));
-    setGroups(groups?.map((g) => g.filter((x) => !ok.has(x.key))).filter((g) => g.length > 1));
-    setChecked(new Set());
-    setConfirm(false);
-    notify(
-      ok.size +
-        " " +
-        t("deleted", "项已删除") +
-        " · " +
-        (r.length - ok.size) +
-        " " +
-        t("failed", "项失败") +
-        (r.find((x) => !x.ok)?.error ? " · " + r.find((x) => !x.ok)?.error : ""),
-    );
+      const ok = new Set(r.filter((x) => x.ok).map((x) => x.key));
+      setGroups(groups?.map((g) => g.filter((x) => !ok.has(x.key))).filter((g) => g.length > 1));
+      setChecked(new Set());
+      setConfirm(false);
+      const failed = r.find((x) => !x.ok);
+      notify(
+        ok.size +
+          " " +
+          t("deleted", "项已删除") +
+          (failed
+            ? " · " + (r.length - ok.size) + " " + t("failed", "项失败") + " · " + failed.error
+            : ""),
+      );
+    } catch (e) {
+      setDeleteError(connectionFailure(e, t).message);
+    } finally {
+      setDeleting(false);
+    }
   }
   async function sync() {
     if (!profile) return;
-    await run(async () => {
-      const dir = folder || (await p.api.pickDestination());
-      if (!dir) return;
-      setFolder(dir);
-      const n = await p.api.syncDirectory(profile.id, normalize(), dir);
-      await changed();
-      notify(n + " " + t("files queued", "个文件已排队"));
-    });
+    setQueuing(true);
+    try {
+      await run(async () => {
+        const dir = folder || (await p.api.pickDestination());
+        if (!dir) return;
+        setFolder(dir);
+        const n = await p.api.syncDirectory(profile.id, scopePrefix, dir);
+        await changed();
+        notify(n + " " + t("files queued", "个文件已排队"));
+      });
+    } finally {
+      setQueuing(false);
+    }
   }
   async function plan(enabled: boolean) {
     if (!profile) return;
@@ -274,7 +311,7 @@ export function Extensions({
         if (!dir) return;
         const entry = {
           profileId: profile.id,
-          prefix: normalize(),
+          prefix: scopePrefix,
           destination: dir,
           minutes,
           enabled,
@@ -316,8 +353,10 @@ export function Extensions({
         {t("Folder scope", "目录范围")}
         <input
           value={scope}
+          disabled={scanning || deleting || queuing}
           onChange={(e) => {
             setScope(e.target.value);
+            setSchedule(undefined);
             setGroups(undefined);
             setChecked(new Set());
           }}
@@ -332,7 +371,7 @@ export function Extensions({
             </h2>
             <button
               className="button primary"
-              disabled={!profile || scanning}
+              disabled={!connected || scanning}
               onClick={() => void scan()}
             >
               <ScanSearch size={15} />{" "}
@@ -364,7 +403,13 @@ export function Extensions({
             </div>
           ))}
           {checked.size > 0 && (
-            <button className="button danger" onClick={() => setConfirm(true)}>
+            <button
+              className="button danger"
+              onClick={() => {
+                setDeleteError("");
+                setConfirm(true);
+              }}
+            >
               <Trash2 size={15} /> {t("Delete selected copies", "删除所选副本")} ({checked.size})
             </button>
           )}
@@ -380,6 +425,7 @@ export function Extensions({
               {p.capabilities.folders && (
                 <button
                   className="button"
+                  disabled={queuing}
                   onClick={() =>
                     void run(async () => {
                       const d = await p.api.pickDestination();
@@ -392,10 +438,10 @@ export function Extensions({
               )}
               <button
                 className="button primary"
-                disabled={!profile || !p.capabilities.folders}
+                disabled={!connected || !p.capabilities.folders || queuing}
                 onClick={() => void sync()}
               >
-                {t("Sync now", "立即同步")}
+                {queuing ? t("Preparing download…", "正在准备下载…") : t("Sync now", "立即同步")}
               </button>
             </div>
           </div>
@@ -411,7 +457,11 @@ export function Extensions({
                   onChange={(e) => setMinutes(+e.target.value)}
                 />
               </label>
-              <button className="button" disabled={!profile} onClick={() => void plan(true)}>
+              <button
+                className="button"
+                disabled={!connected || queuing}
+                onClick={() => void plan(true)}
+              >
                 {t("Enable schedule", "启用定时同步")}
               </button>
               {schedule?.enabled && (
@@ -427,17 +477,28 @@ export function Extensions({
         <Modal
           open
           title={t("Delete duplicate copies", "删除重复副本")}
-          onClose={() => setConfirm(false)}
+          onClose={() => {
+            if (!deleting) setConfirm(false);
+          }}
         >
           <div className="dialog-body stack">
             <div className="notice error">
               {checked.size} {t("objects will be permanently deleted.", "个对象将永久删除。")}
             </div>
+            {deleteError && (
+              <div className="notice error" role="alert">
+                {deleteError}
+              </div>
+            )}
             <div className="row end gap">
-              <button className="button" onClick={() => setConfirm(false)}>
+              <button className="button" disabled={deleting} onClick={() => setConfirm(false)}>
                 {t("Cancel", "取消")}
               </button>
-              <button className="button danger" onClick={() => void deleteDuplicates()}>
+              <button
+                className="button danger"
+                disabled={deleting}
+                onClick={() => void deleteDuplicates()}
+              >
                 {t("Delete", "删除")}
               </button>
             </div>
@@ -498,7 +559,7 @@ export function ConnectionModal({
           await saved();
           close();
         } catch (e) {
-          setError(e instanceof Error ? e.message : String(e));
+          setError(connectionFailure(e, t).message);
         } finally {
           setBusy(false);
         }
