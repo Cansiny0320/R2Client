@@ -1,5 +1,0 @@
-{
-  "name": "r2client-web",
-  "compatibility_date": "2026-07-30",
-  "assets": { "directory": "./dist/client", "not_found_handling": "single-page-application" },
-}

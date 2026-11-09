@@ -1,4 +1,4 @@
-import { app, clipboard, dialog, safeStorage, shell } from "electron";
+import { app, clipboard, dialog, Notification, safeStorage, shell } from "electron";
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import {
@@ -21,9 +21,9 @@ import { pipeline } from "node:stream/promises";
 import { MiB, objectCategory, safeRelative } from "@r2client/core";
 import type { Credentials, Driver, Item, Job, Source, SourceReader } from "@r2client/core";
 import { createR2 } from "@r2client/s3";
-import { ffmpegArgs } from "./media";
+import { ffmpegArgs, restoreJpegExif } from "./media";
 
-type FileRecord = { file: string; name: string; temp?: boolean };
+type FileRecord = { file: string; name: string; temp?: boolean; processed?: boolean };
 const types: Record<string, string> = {
   ".jpeg": "image/jpeg",
   ".jpg": "image/jpeg",
@@ -128,14 +128,19 @@ export async function desktopDriver() {
       !["basic_text", "unknown"].includes(safeStorage.getSelectedStorageBackend())
     );
   }
-  async function register(file: string, name: string, isTemp = false): Promise<Source> {
+  async function register(
+    file: string,
+    name: string,
+    isTemp = false,
+    processed = false,
+  ): Promise<Source> {
     const real = await realpath(file),
       s = await stat(real);
     if (!s.isFile()) throw new Error("Select a regular file");
     const id = crypto.randomUUID();
-    sources[id] = { file: real, name, temp: isTemp };
+    sources[id] = { file: real, name, temp: isTemp, processed };
     await kvSave("file-handles", sources);
-    return { id, name, size: s.size, modified: s.mtimeMs, type: mime(name) };
+    return { id, name, size: s.size, modified: s.mtimeMs, type: mime(name), processed };
   }
   async function findFiles(root: string, prefix: string): Promise<Source[]> {
     const out: Source[] = [];
@@ -167,6 +172,15 @@ export async function desktopDriver() {
         throw new Error("Download path is not a regular directory");
     }
     return path.join(current, filename);
+  }
+  async function registerDirectory(selected: string) {
+    const root = await realpath(selected);
+    const id = Object.keys(dirs).find((i) => dirs[i] === root) ?? crypto.randomUUID();
+    if (!dirs[id]) {
+      dirs[id] = root;
+      await kvSave("directory-handles", dirs);
+    }
+    return id;
   }
   async function ffmpeg() {
     const stored = await kvLoad<string>("ffmpeg");
@@ -234,6 +248,7 @@ export async function desktopDriver() {
         size: s.size,
         type: mime(entry.name),
         modified: s.mtimeMs,
+        processed: entry.processed,
         async read(a, b) {
           const f = await open(entry.file, "r");
           try {
@@ -278,11 +293,32 @@ export async function desktopDriver() {
     async pickDestination() {
       const r = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] });
       if (r.canceled || !r.filePaths[0]) return undefined;
-      const root = await realpath(r.filePaths[0]),
-        id = Object.keys(dirs).find((i) => dirs[i] === root) ?? crypto.randomUUID();
-      dirs[id] = root;
-      await kvSave("directory-handles", dirs);
-      return id;
+      return registerDirectory(r.filePaths[0]);
+    },
+    async defaultDestination() {
+      const root = app.getPath("downloads");
+      await mkdir(root, { recursive: true });
+      return registerDirectory(root);
+    },
+    async downloadCompleted(destination, count, action) {
+      const file = await output(destination, false);
+      const entry = await lstat(file);
+      if (!entry.isFile() || entry.isSymbolicLink()) return;
+      if (action === "reveal") shell.showItemInFolder(file);
+      if (action === "notify" && Notification.isSupported()) {
+        const chinese = app.getLocale().startsWith("zh");
+        const notification = new Notification({
+          title: chinese ? "下载完成" : "Download complete",
+          body:
+            count === 1
+              ? path.basename(file)
+              : chinese
+                ? `已下载 ${count} 个文件`
+                : `${count} files downloaded`,
+        });
+        notification.on("click", () => shell.showItemInFolder(file));
+        notification.show();
+      }
     },
     async revealDestination(id) {
       if (idOk(id) && dirs[id]) {
@@ -431,8 +467,35 @@ export async function desktopDriver() {
       const output = path.join(temp, crypto.randomUUID() + "." + preset.format);
       try {
         const args = ffmpegArgs(file, output, preset, objectCategory(name));
-        await run(f, args, signal);
-        return await register(output, name.replace(/\.[^./]+$/, "") + "." + preset.format, true);
+        await run(
+          f,
+          args,
+          signal,
+          Math.max(1, Math.min(60, Math.trunc(preset.timeoutMinutes ?? 5) || 5)) * 60_000,
+        );
+        if (
+          preset.format === "jpg" &&
+          /\.jpe?g$/i.test(name) &&
+          (preset.metadataMode === "keep_all" || preset.metadataMode === "remove_gps")
+        ) {
+          const input = await open(file, "r");
+          try {
+            const header = Buffer.alloc(1024 * 1024);
+            const { bytesRead } = await input.read(header);
+            await writeFile(
+              output,
+              restoreJpegExif(header.subarray(0, bytesRead), await readFile(output), preset),
+            );
+          } finally {
+            await input.close();
+          }
+        }
+        return await register(
+          output,
+          name.replace(/\.[^./]+$/, "") + "." + preset.format,
+          true,
+          true,
+        );
       } catch (e) {
         await rm(output, { force: true });
         throw e;

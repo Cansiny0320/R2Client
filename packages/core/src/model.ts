@@ -7,6 +7,13 @@ export interface Profile {
   jurisdiction: Jurisdiction;
   publicBase: string;
   demo?: boolean;
+  savedAccountId?: string;
+}
+export interface SavedAccount {
+  id: string;
+  label: string;
+  accountId: string;
+  jurisdiction: Jurisdiction;
 }
 export interface Credentials {
   accessKeyId: string;
@@ -16,6 +23,7 @@ export interface Credentials {
 export interface Connection extends Profile {
   credentials: Credentials;
   remember?: boolean;
+  reuseCredentialsFrom?: string;
 }
 export interface Item {
   key: string;
@@ -47,7 +55,13 @@ export interface Version {
   bytes: ReadableStream<Uint8Array>;
 }
 export interface ObjectStore {
-  list(prefix: string, cursor?: string, recursive?: boolean, signal?: AbortSignal): Promise<Page>;
+  list(
+    prefix: string,
+    cursor?: string,
+    recursive?: boolean,
+    signal?: AbortSignal,
+    limit?: number,
+  ): Promise<Page>;
   head(key: string, signal?: AbortSignal): Promise<Detail>;
   put(
     key: string,
@@ -85,6 +99,7 @@ export interface Source {
   size: number;
   type: string;
   modified: number;
+  processed?: boolean;
 }
 export interface SourceReader extends Source {
   read(start: number, end: number): Promise<Uint8Array>;
@@ -97,6 +112,14 @@ export interface Sink {
   remove(): Promise<void>;
 }
 export type JobState = "queued" | "running" | "paused" | "failed" | "completed" | "cancelled";
+export type DownloadCompletion = "notify" | "reveal" | "none";
+export interface UploadTuning {
+  files: number;
+  global: number;
+  perFile: number;
+  chunkMiB: number;
+  thresholdMiB: number;
+}
 export interface Job {
   id: string;
   profileId: string;
@@ -114,10 +137,13 @@ export interface Job {
   uploadId?: string;
   parts?: Part[];
   partSize?: number;
+  uploadTuning?: UploadTuning;
+  downloadBatch?: { id: string; count: number; action: DownloadCompletion };
   error?: string;
 }
 export interface Snapshot {
   profiles: Profile[];
+  accounts?: SavedAccount[];
   connected: string[];
   jobs: Job[];
   stages: Source[];
@@ -174,6 +200,8 @@ export interface Preset {
   rateMode?: "cbr" | "vbr";
   stripMetadata?: boolean;
   autoRotate?: boolean;
+  metadataMode?: "remove_all" | "remove_gps" | "keep_all";
+  timeoutMinutes?: number;
 }
 export interface Driver {
   platform: "desktop" | "web";
@@ -187,6 +215,8 @@ export interface Driver {
   fileMatches?(destination: string, item: Item): Promise<boolean>;
   safeToReplace?(destination: string): Promise<boolean>;
   pickDestination?(): Promise<string | undefined>;
+  defaultDestination?(): Promise<string>;
+  downloadCompleted?(destination: string, count: number, action: DownloadCompletion): Promise<void>;
   pickSources?(directory: boolean): Promise<Source[]>;
   importUrls(urls: string[]): Promise<Source[]>;
   disposeSource?(id: string): Promise<void>;
@@ -201,6 +231,7 @@ export interface Api {
   snapshot(): Promise<Snapshot>;
   connect(input: Connection): Promise<void>;
   removeProfile(id: string): Promise<void>;
+  forgetAccount(id: string): Promise<void>;
   reorder(ids: string[]): Promise<void>;
   list(id: string, prefix: string, cursor?: string): Promise<Page>;
   detail(id: string, key: string): Promise<Detail>;
@@ -222,9 +253,9 @@ export interface Api {
   upload(
     id: string,
     prefix: string,
-    entries: { id: string; name: string }[],
+    entries: { id: string; name: string; preset?: Preset }[],
     replace: boolean,
-    concurrency: number,
+    concurrency: number | UploadTuning,
     skipDuplicates?: boolean,
   ): Promise<number>;
   download(
@@ -233,6 +264,7 @@ export interface Api {
     directory: string,
     prefix: string,
     replace: boolean,
+    options?: { completion: DownloadCompletion; parallel: number },
   ): Promise<void>;
   pickDestination(): Promise<string | undefined>;
   attach(id: string, source: Source): Promise<void>;
@@ -255,6 +287,7 @@ export const METHODS: ReadonlySet<keyof Api> = new Set([
   "snapshot",
   "connect",
   "removeProfile",
+  "forgetAccount",
   "reorder",
   "list",
   "detail",

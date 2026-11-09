@@ -21,6 +21,8 @@ import type { Job, Preset, Profile, Snapshot, Source } from "@r2client/core";
 import { dateLabel, Empty, FileIcon, IconButton, Modal, splitUrls } from "./common";
 import type { Platform, Preferences, Tr } from "./common";
 import { copyText } from "./sharing";
+import { mediaCategories, MediaFields, MediaRules } from "./media-settings";
+import type { MediaCategory, MediaDefaults } from "./media-settings";
 
 type Run = <T>(operation: () => Promise<T>, success?: string) => Promise<T | undefined>;
 export function MediaDialog({
@@ -29,27 +31,19 @@ export function MediaDialog({
   close,
   convert,
   count = 1,
+  defaults,
 }: {
   source: Source;
   t: Tr;
   close: () => void;
   convert: (preset: Preset, keep: boolean) => Promise<void>;
   count?: number;
+  defaults: MediaDefaults;
 }) {
-  const category = objectCategory(source.name);
-  const formats: Preset["format"][] =
-    category === "image"
-      ? ["jpg", "png", "webp", "avif"]
-      : category === "audio"
-        ? ["mp3", "aac", "ogg", "flac"]
-        : ["mp4", "webm", "avi", "mkv"];
+  const category = objectCategory(source.name) as MediaCategory;
   const [value, change] = useState<Preset>({
-    format: formats[0]!,
-    quality: 80,
-    autoRotate: true,
-    stripMetadata: false,
-    codec: "h264",
-    rateMode: "vbr",
+    ...defaults[category].preset,
+    timeoutMinutes: defaults.timeoutMinutes,
   });
   const [working, setWorking] = useState(false),
     [error, setError] = useState(""),
@@ -82,123 +76,7 @@ export function MediaDialog({
         <span className="muted truncate">
           {count === 1 ? source.name : count + " " + t("files", "个文件")}
         </span>
-        <label>
-          {t("Output format", "输出格式")}
-          <select
-            value={value.format}
-            onChange={(e) => set({ format: e.target.value as Preset["format"] })}
-          >
-            {formats.map((x) => (
-              <option key={x} value={x}>
-                {x.toUpperCase()}
-              </option>
-            ))}
-          </select>
-        </label>
-        {category !== "audio" && (
-          <>
-            <label>
-              {t("Quality", "质量")} · {value.quality}%
-              <input
-                type="range"
-                min="1"
-                max="100"
-                value={value.quality}
-                onChange={(e) => set({ quality: +e.target.value })}
-              />
-            </label>
-            <div className="form-columns">
-              <label>
-                {t("Maximum width", "最大宽度")}
-                <input
-                  type="number"
-                  min="2"
-                  max="8192"
-                  value={value.width ?? ""}
-                  onChange={(e) => set({ width: +e.target.value || undefined })}
-                />
-              </label>
-              <label>
-                {t("Maximum height", "最大高度")}
-                <input
-                  type="number"
-                  min="2"
-                  max="8192"
-                  value={value.height ?? ""}
-                  onChange={(e) => set({ height: +e.target.value || undefined })}
-                />
-              </label>
-            </div>
-          </>
-        )}
-        {category === "video" && (
-          <div className="form-columns">
-            <label>
-              {t("Video codec", "视频编码")}
-              <select
-                value={value.codec}
-                onChange={(e) => set({ codec: e.target.value as Preset["codec"] })}
-              >
-                <option value="h264">H.264</option>
-                <option value="h265">H.265</option>
-                <option value="vp9">VP9</option>
-              </select>
-            </label>
-            <label>
-              {t("Bitrate mode", "码率模式")}
-              <select
-                value={value.rateMode}
-                onChange={(e) => set({ rateMode: e.target.value as Preset["rateMode"] })}
-              >
-                <option value="vbr">VBR</option>
-                <option value="cbr">CBR</option>
-              </select>
-            </label>
-          </div>
-        )}
-        {(category === "audio" || value.rateMode === "cbr") && (
-          <label>
-            {t("Bitrate (kbps)", "码率（kbps）")}
-            <input
-              type="number"
-              min="16"
-              max="30000"
-              value={value.bitrate ?? ""}
-              onChange={(e) => set({ bitrate: +e.target.value || undefined })}
-            />
-          </label>
-        )}
-        {category === "audio" && (
-          <label>
-            {t("Sample rate", "采样率")}
-            <select
-              value={value.sampleRate ?? ""}
-              onChange={(e) => set({ sampleRate: +e.target.value || undefined })}
-            >
-              <option value="">{t("Original", "保持原样")}</option>
-              <option value="44100">44.1 kHz</option>
-              <option value="48000">48 kHz</option>
-            </select>
-          </label>
-        )}
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={value.stripMetadata}
-            onChange={(e) => set({ stripMetadata: e.target.checked })}
-          />{" "}
-          {t("Strip metadata", "清除元数据")}
-        </label>
-        {category !== "audio" && (
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={value.autoRotate}
-              onChange={(e) => set({ autoRotate: e.target.checked })}
-            />{" "}
-            {t("Apply orientation", "自动修正方向")}
-          </label>
-        )}
+        <MediaFields category={category} value={value} set={set} t={t} />
         <label className="check">
           <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />{" "}
           {t("Keep original in staging", "在暂存区保留原文件")}
@@ -256,13 +134,14 @@ export function Uploads({
     [dedup, setDedup] = useState(false);
   useEffect(() => setTarget(prefix), [prefix, profile?.id]);
   const stages = snapshot.stages;
+  const [override, setOverride] = useState<MediaDefaults>();
+  const [editingMedia, setEditingMedia] = useState(false);
+  const mediaConfig = override ?? prefs.media;
   async function pick(isDir: boolean) {
-    if (p.capabilities.desktop)
-      await run(async () => {
-        await p.api.pickSources(isDir);
-        await changed();
-      });
-    else (isDir ? folder : input).current?.click();
+    await run(async () => {
+      await p.api.pickSources(isDir);
+      await changed();
+    });
   }
   async function handleFiles(files: FileList | null) {
     if (!files?.length) return;
@@ -305,9 +184,20 @@ export function Uploads({
       const skipped = await p.api.upload(
         profile.id,
         pre,
-        stages.map((s) => ({ id: s.id, name: names[s.id] ?? s.name })),
+        stages.map((s) => {
+          const category = objectCategory(s.name);
+          const rule = mediaCategories.find((kind) => kind === category);
+          const config = rule && mediaConfig[rule];
+          const preset =
+            !s.processed &&
+            config?.enabled &&
+            (!config.maxMiB || s.size <= config.maxMiB * 1024 * 1024)
+              ? { ...config.preset, timeoutMinutes: mediaConfig.timeoutMinutes }
+              : undefined;
+          return { id: s.id, name: names[s.id] ?? s.name, preset };
+        }),
         replace,
-        prefs.concurrency,
+        prefs.uploadTuning,
         dedup,
       );
       await changed();
@@ -320,6 +210,7 @@ export function Uploads({
           ? t("Duplicates skipped: ", "已跳过重复文件：") + result
           : t("Added to transfers", "已加入传输队列"),
       );
+      setOverride(undefined);
       transfers();
     }
   }
@@ -356,6 +247,9 @@ export function Uploads({
         <span>{t("or select files", "或选择文件")}</span>
       </div>
       <div className="row wrap gap upload-tools">
+        <button className="button" onClick={() => setEditingMedia(true)}>
+          {t("Media processing", "转码设置")}
+        </button>
         <button className="button" onClick={() => void pick(false)}>
           <FilePlus size={16} /> {t("Browse files", "选择文件")}
         </button>
@@ -474,7 +368,7 @@ export function Uploads({
         </div>
       )}
       {url !== undefined && (
-        <Modal title={t("Import URLs", "导入 URL")} open onClose={() => setUrl(undefined)}>
+        <Modal title={t("Add remote files", "添加远程文件")} open onClose={() => setUrl(undefined)}>
           <form
             className="dialog-body stack"
             onSubmit={async (e) => {
@@ -498,14 +392,12 @@ export function Uploads({
                 required
               />
             </label>
-            {!p.capabilities.desktop && (
-              <div className="subtle">
-                {t("The source must allow browser access.", "来源站点需要允许浏览器跨域读取。")}
-              </div>
-            )}
-            <div className="row end">
-              <button className="button primary">
-                <Plus size={15} /> {t("Add to staging", "加入暂存区")}
+            <div className="row end gap">
+              <button type="button" className="button" onClick={() => setUrl(undefined)}>
+                {t("Cancel", "取消")}
+              </button>
+              <button className="button primary" disabled={!url.trim()}>
+                <Plus size={15} /> {t("Add", "添加")}
               </button>
             </div>
           </form>
@@ -528,8 +420,30 @@ export function Uploads({
           </div>
         </Modal>
       )}
+      {editingMedia && (
+        <Modal
+          open
+          title={t("Media processing for this upload", "本批次转码设置")}
+          onClose={() => setEditingMedia(false)}
+        >
+          <div className="dialog-body stack">
+            <MediaRules value={mediaConfig} set={setOverride} t={t} />
+            <div className="row end gap">
+              {override && (
+                <button className="button" onClick={() => setOverride(undefined)}>
+                  {t("Use defaults", "恢复默认")}
+                </button>
+              )}
+              <button className="button primary" onClick={() => setEditingMedia(false)}>
+                {t("Done", "完成")}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
       {media?.[0] && (
         <MediaDialog
+          defaults={mediaConfig}
           source={media[0]}
           count={media.length}
           t={t}

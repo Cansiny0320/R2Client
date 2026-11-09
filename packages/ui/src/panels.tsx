@@ -10,9 +10,10 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { byteLabel, objectCategory } from "@r2client/core";
+import { byteLabel, downloadConcurrency, objectCategory, uploadTuning } from "@r2client/core";
 import type { Connection, Index, Item, Job, Profile, Schedule } from "@r2client/core";
 import { dateLabel, Empty, Modal } from "./common";
+import { MediaRules } from "./media-settings";
 import type { Platform, Preferences, Tr } from "./common";
 type Run = <T>(operation: () => Promise<T>, success?: string) => Promise<T | undefined>;
 
@@ -178,6 +179,7 @@ export function Extensions({
     [groups, setGroups] = useState<Item[][]>(),
     [checked, setChecked] = useState<Set<string>>(new Set()),
     [scanning, setScanning] = useState(false);
+  const [extension, setExtension] = useState<"duplicates" | "download">("duplicates");
   const [folder, setFolder] = useState(""),
     [schedule, setSchedule] = useState<Schedule>(),
     [minutes, setMinutes] = useState(60),
@@ -292,6 +294,24 @@ export function Extensions({
           <p>{profile?.label ?? "—"}</p>
         </div>
       </header>
+      <div className="filter-tabs" aria-label={t("Extensions", "扩展功能")}>
+        <button
+          type="button"
+          className={"button " + (extension === "duplicates" ? "selected" : "")}
+          aria-pressed={extension === "duplicates"}
+          onClick={() => setExtension("duplicates")}
+        >
+          {t("Duplicate files", "重复文件")}
+        </button>
+        <button
+          type="button"
+          className={"button " + (extension === "download" ? "selected" : "")}
+          aria-pressed={extension === "download"}
+          onClick={() => setExtension("download")}
+        >
+          {t("Bucket download", "存储桶下载")}
+        </button>
+      </div>
       <label className="field-narrow">
         {t("Folder scope", "目录范围")}
         <input
@@ -304,107 +324,105 @@ export function Extensions({
           placeholder={t("Entire bucket", "整个存储桶")}
         />
       </label>
-      <div className="panel stack extension-panel">
-        <div className="row between wrap gap">
-          <h2 className="row gap">
-            <ScanSearch size={20} /> {t("Find duplicates", "文件去重")}
-          </h2>
-          <button
-            className="button primary"
-            disabled={!profile || scanning}
-            onClick={() => void scan()}
-          >
-            <ScanSearch size={15} />{" "}
-            {scanning ? t("Scanning…", "扫描中…") : t("Scan by content", "按内容扫描")}
-          </button>
-        </div>
-        {groups && !groups.length && (
-          <div className="subtle">{t("No duplicate content found", "没有发现内容相同的文件")}</div>
-        )}
-        {groups?.map((group, i) => (
-          <div className="duplicate-group" key={i}>
-            <strong>
-              {group.length} {t("identical files", "个相同文件")} · {byteLabel(group[0]!.size)}
-            </strong>
-            {group.map((item) => (
-              <label key={item.key} className="check">
-                <input
-                  type="checkbox"
-                  checked={checked.has(item.key)}
-                  onChange={() => toggle(item, group)}
-                />{" "}
-                <span className="truncate" title={item.key}>
-                  {item.key}
-                </span>
-              </label>
-            ))}
-          </div>
-        ))}
-        {checked.size > 0 && (
-          <button className="button danger" onClick={() => setConfirm(true)}>
-            <Trash2 size={15} /> {t("Delete selected copies", "删除所选副本")} ({checked.size})
-          </button>
-        )}
-      </div>
-      <div className="panel stack extension-panel">
-        <div className="row between wrap gap">
-          <h2 className="row gap">
-            <DownloadCloud size={20} /> {t("Sync to a local folder", "同步到本地目录")}
-          </h2>
-          <div className="row gap">
-            {p.capabilities.folders && (
-              <button
-                className="button"
-                onClick={() =>
-                  void run(async () => {
-                    const d = await p.api.pickDestination();
-                    if (d) setFolder(d);
-                  })
-                }
-              >
-                <FolderOpen size={15} /> {t("Choose folder", "选择目录")}
-              </button>
-            )}
+      {extension === "duplicates" && (
+        <div className="panel stack extension-panel">
+          <div className="row between wrap gap">
+            <h2 className="row gap">
+              <ScanSearch size={20} /> {t("Find duplicates", "文件去重")}
+            </h2>
             <button
               className="button primary"
-              disabled={!profile || !p.capabilities.folders}
-              onClick={() => void sync()}
+              disabled={!profile || scanning}
+              onClick={() => void scan()}
             >
-              {t("Sync now", "立即同步")}
+              <ScanSearch size={15} />{" "}
+              {scanning ? t("Scanning…", "扫描中…") : t("Scan by content", "按内容扫描")}
             </button>
           </div>
+          {groups && !groups.length && (
+            <div className="subtle">
+              {t("No duplicate content found", "没有发现内容相同的文件")}
+            </div>
+          )}
+          {groups?.map((group, i) => (
+            <div className="duplicate-group" key={i}>
+              <strong>
+                {group.length} {t("identical files", "个相同文件")} · {byteLabel(group[0]!.size)}
+              </strong>
+              {group.map((item) => (
+                <label key={item.key} className="check">
+                  <input
+                    type="checkbox"
+                    checked={checked.has(item.key)}
+                    onChange={() => toggle(item, group)}
+                  />{" "}
+                  <span className="truncate" title={item.key}>
+                    {item.key}
+                  </span>
+                </label>
+              ))}
+            </div>
+          ))}
+          {checked.size > 0 && (
+            <button className="button danger" onClick={() => setConfirm(true)}>
+              <Trash2 size={15} /> {t("Delete selected copies", "删除所选副本")} ({checked.size})
+            </button>
+          )}
         </div>
-        {!p.capabilities.folders && (
-          <div className="subtle">
-            {t(
-              "Use Chrome or Edge for browser folder access, or use the desktop client.",
-              "请选择支持目录访问的 Chrome、Edge 或桌面客户端。",
-            )}
-          </div>
-        )}
-        {p.capabilities.desktop && (
-          <div className="row gap wrap">
-            <label>
-              {t("Run every (minutes)", "运行间隔（分钟）")}
-              <input
-                type="number"
-                min="5"
-                max="10080"
-                value={minutes}
-                onChange={(e) => setMinutes(+e.target.value)}
-              />
-            </label>
-            <button className="button" disabled={!profile} onClick={() => void plan(true)}>
-              {t("Enable schedule", "启用定时同步")}
-            </button>
-            {schedule?.enabled && (
-              <button className="button" onClick={() => void plan(false)}>
-                {t("Disable schedule", "停用定时同步")} · {schedule.minutes}m
+      )}
+      {extension === "download" && (
+        <div className="panel stack extension-panel">
+          <div className="row between wrap gap">
+            <h2 className="row gap">
+              <DownloadCloud size={20} /> {t("Sync to a local folder", "同步到本地目录")}
+            </h2>
+            <div className="row gap">
+              {p.capabilities.folders && (
+                <button
+                  className="button"
+                  onClick={() =>
+                    void run(async () => {
+                      const d = await p.api.pickDestination();
+                      if (d) setFolder(d);
+                    })
+                  }
+                >
+                  <FolderOpen size={15} /> {t("Choose folder", "选择目录")}
+                </button>
+              )}
+              <button
+                className="button primary"
+                disabled={!profile || !p.capabilities.folders}
+                onClick={() => void sync()}
+              >
+                {t("Sync now", "立即同步")}
               </button>
-            )}
+            </div>
           </div>
-        )}
-      </div>
+          {p.capabilities.desktop && (
+            <div className="row gap wrap">
+              <label>
+                {t("Run every (minutes)", "运行间隔（分钟）")}
+                <input
+                  type="number"
+                  min="5"
+                  max="10080"
+                  value={minutes}
+                  onChange={(e) => setMinutes(+e.target.value)}
+                />
+              </label>
+              <button className="button" disabled={!profile} onClick={() => void plan(true)}>
+                {t("Enable schedule", "启用定时同步")}
+              </button>
+              {schedule?.enabled && (
+                <button className="button" onClick={() => void plan(false)}>
+                  {t("Disable schedule", "停用定时同步")} · {schedule.minutes}m
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       {confirm && (
         <Modal
           open
@@ -455,6 +473,144 @@ export function ConnectionModal({
     [remember, setRemember] = useState(p.capabilities.desktop);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const form = (
+    <form
+      className="dialog-body stack"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setBusy(true);
+        setError("");
+        try {
+          await p.api.connect({
+            id: profile?.id ?? "",
+            label: label.trim() || bucket,
+            accountId: account,
+            bucket,
+            jurisdiction: region,
+            publicBase: base,
+            remember,
+            credentials: {
+              accessKeyId: access,
+              secretAccessKey: secret,
+              sessionToken: session || undefined,
+            },
+          });
+          await saved();
+          close();
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <label>
+        {t("Display name", "显示名称")}
+        <input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="my-assets"
+          autoComplete="off"
+        />
+      </label>
+      <label>
+        Cloudflare Account ID
+        <input
+          required
+          value={account}
+          readOnly={!!profile}
+          onChange={(e) => setAccount(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </label>
+      <div className="form-columns">
+        <label>
+          {t("Bucket name", "存储桶名称")}
+          <input
+            required
+            value={bucket}
+            readOnly={!!profile}
+            onChange={(e) => setBucket(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+        <label>
+          {t("Jurisdiction", "数据管辖区")}
+          <select
+            disabled={!!profile}
+            value={region}
+            onChange={(e) => setRegion(e.target.value as typeof region)}
+          >
+            <option value="default">{t("Default", "默认")}</option>
+            <option value="eu">EU</option>
+            <option value="fedramp">FedRAMP</option>
+          </select>
+        </label>
+      </div>
+      <label>
+        Access Key ID
+        <input
+          required={!profile}
+          value={access}
+          onChange={(e) => setAccess(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </label>
+      <label>
+        Secret Access Key
+        <input
+          required={!profile}
+          type="password"
+          value={secret}
+          onChange={(e) => setSecret(e.target.value)}
+          autoComplete="new-password"
+        />
+      </label>
+      <details>
+        <summary>{t("Temporary credentials or public URL", "临时凭据或公开链接")}</summary>
+        <div className="stack detail-fields">
+          <label>
+            Session token
+            <input
+              type="password"
+              value={session}
+              onChange={(e) => setSession(e.target.value)}
+              autoComplete="off"
+            />
+          </label>
+          <label>
+            {t("Public URL", "公开访问域名")}
+            <input
+              type="url"
+              placeholder="https://cdn.example.com"
+              value={base}
+              onChange={(e) => setBase(e.target.value)}
+            />
+          </label>
+        </div>
+      </details>
+      <label className="check">
+        <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />{" "}
+        {t("Remember credentials in system storage", "使用系统凭据存储记住密钥")}
+      </label>
+      {error && (
+        <div className="notice error" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="row end gap">
+        <button type="button" className="button" onClick={close}>
+          {t("Cancel", "取消")}
+        </button>
+        <button className="button primary" disabled={busy}>
+          {busy ? t("Connecting…", "正在连接…") : t("Connect", "连接", "接続", "연결")}
+        </button>
+      </div>
+    </form>
+  );
   return (
     <Modal
       open
@@ -465,155 +621,7 @@ export function ConnectionModal({
       }
       onClose={close}
     >
-      <form
-        className="dialog-body stack"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setBusy(true);
-          setError("");
-          try {
-            await p.api.connect({
-              id: profile?.id ?? "",
-              label: label.trim() || bucket,
-              accountId: account,
-              bucket,
-              jurisdiction: region,
-              publicBase: base,
-              remember,
-              credentials: {
-                accessKeyId: access,
-                secretAccessKey: secret,
-                sessionToken: session || undefined,
-              },
-            });
-            await saved();
-            close();
-          } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        <label>
-          {t("Display name", "显示名称")}
-          <input
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            placeholder="my-assets"
-            autoComplete="off"
-          />
-        </label>
-        <label>
-          Cloudflare Account ID
-          <input
-            required
-            value={account}
-            readOnly={!!profile}
-            onChange={(e) => setAccount(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
-        <div className="form-columns">
-          <label>
-            {t("Bucket name", "存储桶名称")}
-            <input
-              required
-              value={bucket}
-              readOnly={!!profile}
-              onChange={(e) => setBucket(e.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
-          <label>
-            {t("Jurisdiction", "数据管辖区")}
-            <select
-              disabled={!!profile}
-              value={region}
-              onChange={(e) => setRegion(e.target.value as typeof region)}
-            >
-              <option value="default">{t("Default", "默认")}</option>
-              <option value="eu">EU</option>
-              <option value="fedramp">FedRAMP</option>
-            </select>
-          </label>
-        </div>
-        <label>
-          Access Key ID
-          <input
-            required={!profile}
-            value={access}
-            onChange={(e) => setAccess(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
-        <label>
-          Secret Access Key
-          <input
-            required={!profile}
-            type="password"
-            value={secret}
-            onChange={(e) => setSecret(e.target.value)}
-            autoComplete="new-password"
-          />
-        </label>
-        <details>
-          <summary>{t("Temporary credentials or public URL", "临时凭据或公开链接")}</summary>
-          <div className="stack detail-fields">
-            <label>
-              Session token
-              <input
-                type="password"
-                value={session}
-                onChange={(e) => setSession(e.target.value)}
-                autoComplete="off"
-              />
-            </label>
-            <label>
-              {t("Public URL", "公开访问域名")}
-              <input
-                type="url"
-                placeholder="https://cdn.example.com"
-                value={base}
-                onChange={(e) => setBase(e.target.value)}
-              />
-            </label>
-          </div>
-        </details>
-        {p.capabilities.desktop ? (
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={remember}
-              onChange={(e) => setRemember(e.target.checked)}
-            />{" "}
-            {t("Remember credentials in system storage", "使用系统凭据存储记住密钥")}
-          </label>
-        ) : (
-          <p className="subtle">
-            {t(
-              "Credentials stay in this tab. Set the bucket CORS policy for this site.",
-              "密钥只保留在当前标签页。请为本站配置存储桶 CORS。",
-            )}
-          </p>
-        )}
-        {error && (
-          <div className="notice error" role="alert">
-            {error}
-          </div>
-        )}
-        <div className="row end gap">
-          <button type="button" className="button" onClick={close}>
-            {t("Cancel", "取消")}
-          </button>
-          <button className="button primary" disabled={busy}>
-            {busy ? t("Connecting…", "正在连接…") : t("Connect", "连接", "接続", "연결")}
-          </button>
-        </div>
-      </form>
+      {form}
     </Modal>
   );
 }
@@ -640,24 +648,31 @@ export function SettingsPanel({
   add: () => void;
   run: Run;
 }) {
-  const [tab, setTab] = useState("appearance"),
+  const [tab, setTab] = useState("buckets"),
     [ffmpeg, setFFmpeg] = useState<{ available: boolean; executable?: string }>();
   const tabs = [
-    ["buckets", t("Buckets", "存储桶")],
-    ["appearance", t("Appearance", "外观")],
-    ["transfers", t("Transfers", "传输")],
-    ["sharing", t("Sharing", "分享")],
-    ["about", t("About", "关于")],
+    ["buckets", t("Bucket settings", "存储桶设置")],
+    ["appearance", t("Layout settings", "布局设置")],
+    ["language", t("Language settings", "语言设置")],
+    ["upload", t("Upload settings", "上传设置")],
+    ["download", t("Download settings", "下载设置")],
+    ["sharing", t("Sharing settings", "分享设置")],
+    ["about", t("About", "关于软件")],
   ];
   useEffect(() => {
-    if (tab === "transfers" && p.capabilities.desktop)
+    if (tab === "upload")
       void p.api
         .ffmpegStatus()
         .then(setFFmpeg)
         .catch(() => {});
   }, [p, tab]);
   return (
-    <Modal title={t("Settings", "设置", "設定", "설정")} open onClose={close} wide>
+    <Modal
+      title={t("Settings", "设置", "設定", "설정")}
+      open
+      onClose={close}
+      backLabel={t("Back", "返回")}
+    >
       <div className="settings-layout">
         <nav>
           {tabs.map(([id, label]) => (
@@ -692,19 +707,6 @@ export function SettingsPanel({
           {tab === "appearance" && (
             <>
               <label>
-                {t("Language", "语言", "言語", "언어")}
-                <select
-                  aria-label="Language"
-                  value={prefs.language}
-                  onChange={(e) => set({ language: e.target.value as Preferences["language"] })}
-                >
-                  <option value="en">English</option>
-                  <option value="zh">简体中文</option>
-                  <option value="ja">日本語</option>
-                  <option value="ko">한국어</option>
-                </select>
-              </label>
-              <label>
                 {t("Theme", "主题", "テーマ", "테마")}
                 <select
                   value={prefs.theme}
@@ -736,6 +738,19 @@ export function SettingsPanel({
                   <option value="list">{t("List", "列表")}</option>
                 </select>
               </label>
+              <label>
+                {t("Default page size", "默认加载数量")}
+                <select
+                  value={prefs.pageSize}
+                  onChange={(e) => set({ pageSize: +e.target.value as Preferences["pageSize"] })}
+                >
+                  {[25, 50, 100, 200].map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="check">
                 <input
                   type="checkbox"
@@ -746,20 +761,61 @@ export function SettingsPanel({
               </label>
             </>
           )}
-          {tab === "transfers" && (
+          {tab === "language" && (
+            <label>
+              {t("Language", "语言", "言語", "언어")}
+              <select
+                aria-label="Language"
+                value={prefs.language}
+                onChange={(e) => set({ language: e.target.value as Preferences["language"] })}
+              >
+                <option value="en">English</option>
+                <option value="zh">简体中文</option>
+                <option value="ja">日本語</option>
+                <option value="ko">한국어</option>
+              </select>
+            </label>
+          )}
+          {tab === "upload" && (
             <>
-              <label>
-                {t("Parallel file transfers", "文件上传并发数")}
-                <input
-                  type="number"
-                  min="1"
-                  max="5"
-                  value={prefs.concurrency}
-                  onChange={(e) =>
-                    set({ concurrency: Math.max(1, Math.min(5, +e.target.value || 1)) })
-                  }
-                />
-              </label>
+              <div className="form-columns">
+                {(
+                  [
+                    ["files", t("Parallel file uploads", "文件上传并发数"), 1, 16],
+                    ["global", t("Total concurrent uploads", "全局上传并发数"), 1, 32],
+                    ["perFile", t("Parallel parts per file", "单文件分片并发数"), 1, 16],
+                    ["chunkMiB", t("Part size (MiB)", "分片大小（MiB）"), 5, 128],
+                    [
+                      "thresholdMiB",
+                      t("Multipart threshold (MiB)", "分片上传阈值（MiB）"),
+                      prefs.uploadTuning.chunkMiB,
+                      512,
+                    ],
+                  ] as const
+                ).map(([field, label, min, max]) => (
+                  <label key={field}>
+                    {label}
+                    <input
+                      type="number"
+                      min={min}
+                      max={max}
+                      value={prefs.uploadTuning[field]}
+                      onChange={(e) =>
+                        set({
+                          uploadTuning: uploadTuning({
+                            ...prefs.uploadTuning,
+                            [field]: e.target.valueAsNumber,
+                          }),
+                        })
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+              <details className="stack">
+                <summary>{t("Default media processing", "默认转码设置")}</summary>
+                <MediaRules value={prefs.media} set={(media) => set({ media })} t={t} />
+              </details>
               <label>
                 {t("Refresh files every (minutes, 0 disables)", "自动刷新（分钟，0 表示关闭）")}
                 <input
@@ -805,6 +861,72 @@ export function SettingsPanel({
                 </div>
               )}
             </>
+          )}
+          {tab === "download" && (
+            <div className="stack">
+              <strong>
+                {t(
+                  "Default download folder",
+                  "默认下载目录",
+                  "既定のダウンロード先",
+                  "기본 다운로드 폴더",
+                )}
+              </strong>
+              <div className="row gap wrap">
+                <button
+                  className="button"
+                  onClick={() =>
+                    void run(async () => {
+                      const folder = await p.api.pickDestination();
+                      if (folder) set({ downloadFolder: folder });
+                    })
+                  }
+                >
+                  <FolderOpen size={15} /> {t("Choose folder", "选择目录")}
+                </button>
+                {prefs.downloadFolder && (
+                  <>
+                    <button
+                      className="button"
+                      onClick={() => void run(() => p.api.revealDestination(prefs.downloadFolder))}
+                    >
+                      {t("Open folder", "打开目录")}
+                    </button>
+                    <button className="button ghost" onClick={() => set({ downloadFolder: "" })}>
+                      {t("Use system Downloads folder", "使用系统下载目录")}
+                    </button>
+                  </>
+                )}
+              </div>
+              {!prefs.downloadFolder && (
+                <span className="muted">{t("System Downloads folder", "系统下载目录")}</span>
+              )}
+              <label>
+                {t("When download completes", "下载完成后的操作")}
+                <select
+                  value={prefs.downloadCompletion}
+                  onChange={(e) =>
+                    set({ downloadCompletion: e.target.value as Preferences["downloadCompletion"] })
+                  }
+                >
+                  <option value="notify">{t("Show notification", "显示通知")}</option>
+                  <option value="reveal">{t("Show in folder", "在文件夹中显示")}</option>
+                  <option value="none">{t("Do nothing", "无操作")}</option>
+                </select>
+              </label>
+              <label>
+                {t("Parallel downloads", "下载并发数")}
+                <input
+                  type="number"
+                  min="1"
+                  max="16"
+                  value={prefs.downloadParallel}
+                  onChange={(e) =>
+                    set({ downloadParallel: downloadConcurrency(e.target.valueAsNumber) })
+                  }
+                />
+              </label>
+            </div>
           )}
           {tab === "sharing" && (
             <>

@@ -1,13 +1,35 @@
-import type { Item, Mutation, Profile } from "./model";
+import type { Item, Mutation, Profile, UploadTuning } from "./model";
 
 export const MiB = 1024 * 1024;
 export const GiB = 1024 * MiB;
 export const MAX_OBJECT = 5 * 1024 * GiB;
 export const UPLOAD_PART_MIN = 5 * MiB;
-export function partSize(size: number) {
+export const DEFAULT_UPLOAD: Readonly<UploadTuning> = {
+  files: 4,
+  global: 8,
+  perFile: 4,
+  chunkMiB: 8,
+  thresholdMiB: 32,
+};
+function integer(value: number | undefined, fallback: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, Number.isFinite(value) ? Math.trunc(value!) : fallback));
+}
+export function uploadTuning(input?: number | Partial<UploadTuning>): UploadTuning {
+  const o = typeof input === "number" ? { files: input } : input;
+  const chunkMiB = integer(o?.chunkMiB, DEFAULT_UPLOAD.chunkMiB, 5, 128);
+  return {
+    files: integer(o?.files, DEFAULT_UPLOAD.files, 1, 16),
+    global: integer(o?.global, DEFAULT_UPLOAD.global, 1, 32),
+    perFile: integer(o?.perFile, DEFAULT_UPLOAD.perFile, 1, 16),
+    chunkMiB,
+    thresholdMiB: integer(o?.thresholdMiB, DEFAULT_UPLOAD.thresholdMiB, chunkMiB, 512),
+  };
+}
+export const downloadConcurrency = (value?: number) => integer(value, 2, 1, 16);
+export function partSize(size: number, preferred = 32 * MiB) {
   if (!Number.isSafeInteger(size) || size < 0 || size > MAX_OBJECT)
     throw new Error("File size is outside R2 limits");
-  return Math.max(32 * MiB, Math.ceil(size / 10_000 / MiB) * MiB);
+  return Math.max(UPLOAD_PART_MIN, preferred, Math.ceil(size / 10_000 / MiB) * MiB);
 }
 export function profileEndpoint(profile: Pick<Profile, "accountId" | "jurisdiction">) {
   if (!/^[a-f0-9]{32}$/i.test(profile.accountId))

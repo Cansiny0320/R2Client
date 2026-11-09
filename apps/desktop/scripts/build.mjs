@@ -24,8 +24,5 @@ await Promise.all([
     target: "node22",
     outfile: "dist/preload.cjs",
   }),
-  cp(new URL("../../web/dist/client/", import.meta.url), new URL("../dist/ui/", import.meta.url), {
-    recursive: true,
-  }),
   cp(new URL("../build/icon.png", import.meta.url), new URL("../dist/icon.png", import.meta.url)),
 ]);

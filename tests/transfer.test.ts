@@ -56,7 +56,7 @@ function memoryDriver(store: DemoStore): Driver {
     save: async (k, v) => {
       map.set(k, v);
     },
-    getSecret: async () => undefined,
+    getSecret: async () => ({ accessKeyId: "fixture", secretAccessKey: "fixture" }),
     setSecret: async () => {},
     source: async () => undefined,
     sink: async () => {
@@ -65,6 +65,39 @@ function memoryDriver(store: DemoStore): Driver {
     importUrls: async () => [],
   };
 }
+async function fixtureEngine(driver: Driver) {
+  await driver.save("profiles", [
+    {
+      id: "demo",
+      bucket: "test-assets",
+      label: "Fixture",
+      accountId: "0".repeat(32),
+      jurisdiction: "default",
+      publicBase: "",
+    },
+  ]);
+  return new Engine(driver);
+}
+test("startup ignores the old demo profile and keeps a saved bucket", async () => {
+  const driver = memoryDriver(new DemoStore());
+  assert.deepEqual((await new Engine(driver).snapshot()).profiles, []);
+  const demo = {
+    id: "demo",
+    bucket: "demo-assets",
+    label: "Demo",
+    accountId: "0".repeat(32),
+    jurisdiction: "default" as const,
+    publicBase: "",
+    demo: true,
+  };
+  const real = { ...demo, id: "archive", bucket: "archive", label: "Archive", demo: false };
+  await driver.save("profiles", [demo]);
+  assert.deepEqual((await new Engine(driver).snapshot()).profiles, []);
+  await driver.save("profiles", [demo, real]);
+  const restored = await new Engine(driver).snapshot();
+  assert.deepEqual(restored.profiles, [real]);
+  assert.deepEqual(restored.connected, [real.id]);
+});
 test("large part sizing is bounded and conforms to the part count limit", () => {
   assert.equal(partSize(50 * 1024 * MiB), 32 * MiB);
   assert.ok(Math.ceil((5 * 1024 ** 4) / partSize(5 * 1024 ** 4)) <= 10000);
@@ -166,7 +199,7 @@ test("download requests only the missing bytes and refuses a replaced source", a
   assert.deepEqual(data, [1, 2, 3, 4, 5]);
 });
 test("bulk plan rejects collisions and move preserves the source if copy fails", async () => {
-  const engine = new Engine(memoryDriver(new DemoStore()));
+  const engine = await fixtureEngine(memoryDriver(new DemoStore()));
   const source = "README.md";
   const copy = await engine.mutate("demo", [
     { kind: "copy", key: source, target: "documents/test.md" },
@@ -207,7 +240,7 @@ test("finished uploads release their staged file handles, including skipped dupl
     released.add(id);
     files.delete(id);
   };
-  const engine = new Engine(d);
+  const engine = await fixtureEngine(d);
   await engine.stage([first, second]);
   assert.equal(
     await engine.upload(
@@ -230,8 +263,103 @@ test("finished uploads release their staged file handles, including skipped dupl
   assert.equal((await engine.snapshot()).jobs[0]?.state, "completed");
 });
 test("document preview reads through the storage adapter and rejects mislabelled PDFs", async () => {
-  const engine = new Engine(memoryDriver(new DemoStore()));
+  const engine = await fixtureEngine(memoryDriver(new DemoStore()));
   const text = await engine.previewDocument("demo", "documents/guide.txt", "text");
   assert.match(new TextDecoder().decode(text), /Welcome to the R2Client demo/);
   await assert.rejects(engine.previewDocument("demo", "README.md", "pdf"), /not a valid PDF/);
+});
+
+test("removing the last bucket retains its legacy account across restart and allows deliberate forgetting", async () => {
+  const driver = memoryDriver(new DemoStore());
+  const secret = { accessKeyId: "key-a", secretAccessKey: "secret-a" };
+  const secrets = new Map([["demo", secret]]);
+  driver.getSecret = async (id) => secrets.get(id);
+  driver.setSecret = async (id, value) => {
+    if (value) secrets.set(id, value);
+    else secrets.delete(id);
+  };
+  const first = await fixtureEngine(driver);
+  const before = (await first.snapshot()).profiles[0]!;
+  await first.removeProfile(before.id);
+  const reopened = new Engine(driver);
+  const { accounts, profiles } = await reopened.snapshot();
+  assert.deepEqual(profiles, []);
+  assert.equal(accounts?.[0]?.id, before.id);
+  assert.ok(!JSON.stringify(accounts).includes(secret.secretAccessKey));
+  await reopened.connect({
+    ...before,
+    id: "",
+    bucket: "second-bucket",
+    credentials: { accessKeyId: "", secretAccessKey: "" },
+    reuseCredentialsFrom: before.id,
+    remember: true,
+  });
+  const second = (await reopened.snapshot()).profiles[0]!;
+  assert.equal(second.savedAccountId, before.id);
+  await assert.rejects(reopened.forgetAccount(before.id), /Remove the connected buckets/);
+  await reopened.removeProfile(second.id);
+  await reopened.forgetAccount(before.id);
+  assert.deepEqual((await new Engine(driver).snapshot()).accounts, []);
+  assert.equal(secrets.size, 0);
+});
+
+test("download completion uses the system destination and only runs once for successful batches", async () => {
+  const store = new DemoStore(),
+    driver = memoryDriver(store);
+  const engine = await fixtureEngine(driver);
+  const effects: unknown[] = [];
+  driver.defaultDestination = async () => "system-download";
+  driver.downloadCompleted = async (destination, count, action) => {
+    effects.push({ destination, count, action });
+  };
+  driver.sink = async ({ destination }) => {
+    if (destination?.includes("failed.txt")) throw new Error("Cannot write");
+    let bytes = 0;
+    return {
+      bytes: async () => bytes,
+      append: async (data) => {
+        bytes += data.length;
+      },
+      finish: async () => {},
+      reset: async () => {
+        bytes = 0;
+      },
+      remove: async () => {},
+    };
+  };
+  const items = await Promise.all(
+    ["a.txt", "b.txt", "failed.txt", "none.txt"].map(async (key) => {
+      await store.put(key, new Uint8Array([1, 2]), "text/plain", false);
+      return store.head(key);
+    }),
+  );
+  await engine.download("demo", items.slice(0, 2), "", "", false, {
+    completion: "reveal",
+    parallel: 2,
+  });
+  for (let i = 0; effects.length === 0 && i < 100; i++) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(effects.length, 1);
+  const effect = effects[0] as { destination: string; count: number; action: string };
+  assert.ok(effect.destination.startsWith('["system-download",'));
+  assert.equal(effect.count, 2);
+  assert.equal(effect.action, "reveal");
+  await engine.download("demo", items.slice(2, 3), "", "", false, {
+    completion: "notify",
+    parallel: 2,
+  });
+  await engine.download("demo", items.slice(3), "", "", false, { completion: "none", parallel: 2 });
+  for (let i = 0; i < 100; i++) {
+    if (
+      (await engine.snapshot()).jobs.every((j) => j.state === "completed" || j.state === "failed")
+    )
+      break;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.deepEqual((await engine.snapshot()).jobs.map((j) => j.state).sort(), [
+    "completed",
+    "completed",
+    "completed",
+    "failed",
+  ]);
+  assert.equal(effects.length, 1);
 });

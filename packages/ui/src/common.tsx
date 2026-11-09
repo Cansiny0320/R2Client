@@ -1,9 +1,22 @@
 import { Dialog } from "@base-ui/react/dialog";
-import { Cloud, File, FileAudio, FileImage, FileText, FileVideo, Folder, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Cloud,
+  File,
+  FileAudio,
+  FileImage,
+  FileText,
+  FileVideo,
+  Folder,
+  X,
+} from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
-import type { Api, Item } from "@r2client/core";
-import { objectCategory } from "@r2client/core";
+import { useRef } from "react";
+import type { Api, DownloadCompletion, Item, UploadTuning } from "@r2client/core";
+import { DEFAULT_UPLOAD, objectCategory } from "@r2client/core";
 import { locales } from "./languages";
+import { mediaDefaults } from "./media-settings";
+import type { MediaDefaults } from "./media-settings";
 
 export interface Platform {
   api: Api;
@@ -18,24 +31,34 @@ export interface Preferences {
   theme: "system" | "light" | "dark";
   view: "grid" | "list";
   zoom: number;
-  concurrency: number;
+  uploadTuning: UploadTuning;
+  media: MediaDefaults;
   replace: boolean;
   shareFormat: "url" | "markdown" | "html" | "bbcode";
   shareServer: string;
   preview: boolean;
   autoRefresh: number;
+  downloadFolder: string;
+  downloadCompletion: DownloadCompletion;
+  downloadParallel: number;
+  pageSize: 25 | 50 | 100 | 200;
 }
 export const defaults: Preferences = {
   language: "en",
   theme: "system",
   view: "grid",
   zoom: 100,
-  concurrency: 2,
+  uploadTuning: { ...DEFAULT_UPLOAD },
+  media: mediaDefaults,
   replace: false,
   shareFormat: "url",
   shareServer: "",
   preview: true,
   autoRefresh: 0,
+  downloadFolder: "",
+  downloadCompletion: "notify",
+  downloadParallel: 2,
+  pageSize: 100,
 };
 export type Tr = (english: string, chinese?: string, japanese?: string, korean?: string) => string;
 export const translator =
@@ -79,13 +102,20 @@ export function Modal({
   onClose,
   children,
   wide = false,
+  backLabel,
+  pageHeading,
+  pageActions,
 }: {
   title: string;
   open: boolean;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  backLabel?: string;
+  pageHeading?: ReactNode;
+  pageActions?: ReactNode;
 }) {
+  const backButton = useRef<HTMLButtonElement>(null);
   return (
     <Dialog.Root
       open={open}
@@ -95,13 +125,33 @@ export function Modal({
     >
       <Dialog.Portal>
         <Dialog.Backdrop className="dialog-backdrop" />
-        <Dialog.Popup className={"dialog " + (wide ? "dialog-wide" : "")}>
-          <div className="dialog-title">
-            <Dialog.Title>{title}</Dialog.Title>
-            <Dialog.Close aria-label="Close" className="icon-button">
-              <X size={17} />
-            </Dialog.Close>
-          </div>
+        <Dialog.Popup
+          className={"dialog " + (backLabel ? "dialog-page" : wide ? "dialog-wide" : "")}
+          initialFocus={backLabel ? backButton : undefined}
+        >
+          {backLabel ? (
+            <header className="dialog-page-title">
+              <Dialog.Close ref={backButton} aria-label={backLabel} className="button">
+                <ArrowLeft size={15} /> {backLabel}
+              </Dialog.Close>
+              {pageHeading ? (
+                <div className="dialog-page-heading">
+                  <Dialog.Title>{title}</Dialog.Title>
+                  {pageHeading}
+                </div>
+              ) : (
+                <Dialog.Title className="sr-only">{title}</Dialog.Title>
+              )}
+              {pageActions}
+            </header>
+          ) : (
+            <div className="dialog-title">
+              <Dialog.Title>{title}</Dialog.Title>
+              <Dialog.Close aria-label="Close" className="icon-button">
+                <X size={17} />
+              </Dialog.Close>
+            </div>
+          )}
           {children}
         </Dialog.Popup>
       </Dialog.Portal>
@@ -140,7 +190,15 @@ export function dateLabel(date: string) {
   const d = new Date(date);
   return Number.isNaN(d.getTime())
     ? "—"
-    : d.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+    : d.toLocaleString(undefined, {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
 }
 type Entry = {
   name: string;

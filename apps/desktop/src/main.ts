@@ -10,7 +10,7 @@ import {
   Tray,
 } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Engine, METHODS } from "@r2client/core";
@@ -31,8 +31,10 @@ protocol.registerSchemesAsPrivileged([
 ]);
 const origin = "r2app://local";
 const smoke = app.commandLine.getSwitchValue("r2client-smoke-output");
-if (smoke)
+const smokeCurrentProfile = !!smoke && app.commandLine.hasSwitch("r2client-smoke-current-profile");
+if (smoke && !smokeCurrentProfile)
   app.setPath("userData", path.join(path.dirname(path.resolve(smoke)), "electron-smoke-profile"));
+if (process.platform === "win32") app.setAppUserModelId("top.cansiny.r2client");
 const authorized = app.requestSingleInstanceLock();
 if (!authorized) app.quit();
 else
@@ -46,12 +48,19 @@ else
 
 async function start() {
   const ui = path.join(__dirname, "ui");
-  const headersText = await readFile(path.join(ui, "_headers"), "utf8");
-  const csp =
-    headersText
-      .split("\n")
-      .find((x) => x.trim().startsWith("Content-Security-Policy:"))
-      ?.split("Content-Security-Policy: ")[1] ?? "default-src 'self'";
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' https: blob: data:",
+    "media-src 'self' https: blob:",
+    "connect-src 'self' https: data: http://localhost:* http://127.0.0.1:*",
+    "frame-src https: blob:",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'none'",
+  ].join("; ");
   protocol.handle("r2app", async (request) => {
     const url = new URL(request.url);
     if (url.hostname !== "local" || request.method !== "GET")
@@ -60,7 +69,7 @@ async function start() {
     if (name.includes("\\") || name.includes("\0")) return new Response(null, { status: 400 });
     const p = path.resolve(ui, "." + name),
       relative = path.relative(ui, p);
-    if (relative.startsWith("..") || path.isAbsolute(relative) || relative === "_headers")
+    if (relative.startsWith("..") || path.isAbsolute(relative))
       return new Response(null, { status: 404 });
     try {
       const resource = await net.fetch(pathToFileURL(p).href);
@@ -153,16 +162,35 @@ async function start() {
   }
   async function finishSmoke(view: BrowserWindow) {
     try {
-      const result = await view.webContents.executeJavaScript(`new Promise((resolve,reject)=>{
-        const until=Date.now()+10000;
-        const timer=setInterval(()=>{
-          const name=document.querySelector(".bucket-name strong")?.textContent;
-          if(name&&typeof window.r2client?.api?.snapshot==="function"){clearInterval(timer);window.r2client.api.previewDocument("demo","documents/guide.txt","text").then(bytes=>resolve({bucket:name,bridge:true,title:document.title,preview:new TextDecoder().decode(bytes).includes("Welcome to the R2Client demo.")}),reject);}
-          else if(Date.now()>until){clearInterval(timer);reject(new Error("Renderer or preload did not initialize"));}
-        },50);
-      })`);
-      await writeFile(smoke, JSON.stringify(result));
-      app.exit(result?.preview === true ? 0 : 1);
+      const result = await view.webContents.executeJavaScript(`(async () => {
+        const bridge = window.r2client?.api;
+        if (!bridge) throw new Error("Missing preload");
+        const snap = await bridge.snapshot();
+        const limit = Date.now() + 15000;
+        const existing = ${smokeCurrentProfile};
+        let profiles = [];
+        if (existing) {
+          for (const p of snap.profiles) {
+            const connected = snap.connected.includes(p.id);
+            const listed = connected ? (await bridge.list(p.id, "")).items.length : null;
+            profiles.push({ bucket: p.bucket, connected, listed });
+          }
+        }
+        while (Date.now() < limit) {
+          const bucket = document.querySelector(".bucket.active .bucket-name strong")?.textContent;
+          const active = snap.profiles.find((p) => p.label === bucket);
+          const welcome = !!document.querySelector(".setup-welcome h1");
+          const fileCards = document.querySelectorAll(".file-card").length;
+          if (existing ? active && profiles.some((p) => p.connected) && (fileCards || profiles.every(p => p.listed === 0)) : welcome) {
+            return { bridge: true, welcome, profiles, fileCards, activeBucket: active?.bucket };
+          }
+          await new Promise((r) => setTimeout(r, 75));
+        }
+        throw new Error("Expected startup view did not render");
+      })()`);
+      const { available: ffmpeg } = await api.ffmpegStatus();
+      await writeFile(smoke, JSON.stringify({ ...result, ffmpeg }));
+      app.exit(result?.bridge ? 0 : 1);
     } catch (e) {
       await writeFile(
         smoke,

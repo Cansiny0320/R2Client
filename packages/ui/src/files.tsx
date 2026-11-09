@@ -1,6 +1,8 @@
 import {
   ArrowDownToLine,
   ArrowUpToLine,
+  ArrowUpRight,
+  Check,
   ChevronLeft,
   ChevronRight,
   Copy,
@@ -11,29 +13,21 @@ import {
   Link2,
   List,
   Pencil,
+  QrCode,
   RefreshCw,
   Search,
   Settings2,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { byteLabel, joined, nameOf, objectCategory, renamePlan } from "@r2client/core";
-import type {
-  Detail,
-  Index,
-  Item,
-  Mutation,
-  Outcome,
-  Page,
-  Profile,
-  RenameRule,
-} from "@r2client/core";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { byteLabel, formatLink, joined, nameOf, objectCategory, renamePlan } from "@r2client/core";
+import type { Detail, Index, Item, Mutation, Outcome, Profile, RenameRule } from "@r2client/core";
 import { dateLabel, Empty, FileIcon, IconButton, Modal } from "./common";
 import type { Platform, Preferences, Tr } from "./common";
-import { ShareDialog } from "./sharing";
+import { copyText, ShareDialog } from "./sharing";
 
 type Fn = <T>(operation: () => Promise<T>, success?: string) => Promise<T | undefined>;
-const PAGE_SIZE = 24;
+const emptyDirectory: Item[] = [];
 const dimensions = ["name", "newest", "oldest", "size"] as const;
 type Sort = (typeof dimensions)[number];
 const danger = (kind: string) => kind === "delete" || kind === "move" || kind === "rename";
@@ -54,6 +48,19 @@ const labels = (t: Tr): Record<Action, string> => ({
   metadata: t("Metadata", "元数据"),
   folder: t("New folder", "新建文件夹"),
 });
+const thumbnailQueue = new Set<() => Promise<void>>();
+let activeThumbnails = 0;
+function pumpThumbnails() {
+  for (const start of thumbnailQueue) {
+    if (activeThumbnails >= 4) break;
+    thumbnailQueue.delete(start);
+    activeThumbnails++;
+    void start().finally(() => {
+      activeThumbnails--;
+      pumpThumbnails();
+    });
+  }
+}
 function Thumb({
   p,
   profile,
@@ -67,41 +74,65 @@ function Thumb({
   prefs: Preferences;
   t: Tr;
 }) {
-  const ref = useRef<HTMLDivElement>(null),
-    [src, setSrc] = useState("");
-  const isImage = objectCategory(item.key) === "image" && item.kind === "object" && prefs.preview;
+  const ref = useRef<HTMLDivElement>(null);
+  const finish = useRef<() => void>(undefined);
+  const [src, setSrc] = useState("");
+  const isImage = item.kind === "object" && objectCategory(item.key) === "image" && prefs.preview;
   useEffect(() => {
-    if (!isImage || !ref.current) return;
+    const element = ref.current;
+    if (!isImage || !element) return;
     let current = true;
+    const start = () =>
+      new Promise<void>((resolve) => {
+        observer.disconnect();
+        const settle = () => {
+          clearTimeout(timer);
+          if (finish.current === settle) finish.current = undefined;
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          setSrc("");
+          settle();
+        }, 30_000);
+        finish.current = settle;
+        void Promise.resolve()
+          .then(() => p.api.links(profile.id, item.key, 300, "preview"))
+          .then((url) => {
+            if (current && finish.current === settle && url) setSrc(url);
+            else settle();
+          }, settle);
+      });
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          observer.disconnect();
-          void p.api
-            .links(profile.id, item.key, 300, "preview")
-            .then((url) => {
-              if (current) setSrc(url);
-            })
-            .catch(() => {});
-        }
+        if (!current) return;
+        if (entries.at(-1)?.isIntersecting) {
+          thumbnailQueue.add(start);
+          pumpThumbnails();
+        } else thumbnailQueue.delete(start);
       },
-      { rootMargin: "100px" },
+      { rootMargin: "60px" },
     );
-    observer.observe(ref.current);
+    observer.observe(element);
     return () => {
       current = false;
       observer.disconnect();
+      thumbnailQueue.delete(start);
+      finish.current?.();
     };
-  }, [profile.id, item.key, item.etag, isImage, p]);
+  }, [profile.id, item.key, isImage, p]);
   return (
     <div ref={ref} className={"thumbnail " + (item.kind === "folder" ? "thumbnail-folder" : "")}>
-      {src ? (
+      {isImage && src ? (
         <img
           src={src}
           alt=""
-          loading="lazy"
+          decoding="async"
           referrerPolicy="no-referrer"
-          onError={() => setSrc("")}
+          onLoad={() => finish.current?.()}
+          onError={() => {
+            setSrc("");
+            finish.current?.();
+          }}
         />
       ) : (
         <div className="thumb-placeholder">
@@ -121,7 +152,12 @@ function Preview({
   t,
   close,
   onShare,
+  onCopy,
+  onView,
   onDownload,
+  onRename,
+  onDelete,
+  onNavigate,
 }: {
   p: Platform;
   profile: Profile;
@@ -129,12 +165,102 @@ function Preview({
   t: Tr;
   close: () => void;
   onShare: () => void;
+  onCopy: () => void;
+  onView: () => void;
   onDownload: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+  onNavigate?: (step: -1 | 1) => void;
+}) {
+  useLayoutEffect(() => {
+    if (!onNavigate) return;
+    const keydown = (e: KeyboardEvent) => {
+      if (
+        e.altKey ||
+        e.ctrlKey ||
+        e.metaKey ||
+        (e.target instanceof HTMLElement &&
+          e.target.closest("input, textarea, select, video, audio, [contenteditable=true]"))
+      )
+        return;
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        onNavigate(e.key === "ArrowLeft" ? -1 : 1);
+      }
+    };
+    window.addEventListener("keydown", keydown, true);
+    return () => window.removeEventListener("keydown", keydown, true);
+  }, [onNavigate]);
+  const toolbar = [
+    [ArrowDownToLine, t("Download", "下载"), onDownload],
+    [Link2, t("Copy link", "复制链接"), onCopy],
+    [QrCode, t("Share and QR code", "分享与二维码"), onShare],
+    [ArrowUpRight, t("View in browser", "在浏览器中查看"), onView],
+    [Pencil, labels(t).rename, onRename],
+    [Trash2, labels(t).delete, onDelete],
+  ] as const;
+  return (
+    <Modal
+      title={nameOf(item.key)}
+      open
+      onClose={close}
+      backLabel={t("Back", "返回")}
+      pageHeading={
+        <span>
+          {byteLabel(item.size)} · {dateLabel(item.modified)}
+        </span>
+      }
+      pageActions={
+        <div className="preview-actions">
+          {toolbar.map(([Icon, label, action]) => (
+            <IconButton key={label} label={label} onClick={action}>
+              <Icon size={17} />
+            </IconButton>
+          ))}
+        </div>
+      }
+    >
+      <div className="preview-gallery">
+        {onNavigate && (
+          <IconButton
+            className="preview-previous"
+            label={t("Previous file", "上一个文件")}
+            onClick={() => onNavigate(-1)}
+          >
+            <ChevronLeft size={26} />
+          </IconButton>
+        )}
+        <PreviewContent key={item.key} p={p} profile={profile} item={item} t={t} />
+        {onNavigate && (
+          <IconButton
+            className="preview-next"
+            label={t("Next file", "下一个文件")}
+            onClick={() => onNavigate(1)}
+          >
+            <ChevronRight size={26} />
+          </IconButton>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function PreviewContent({
+  p,
+  profile,
+  item,
+  t,
+}: {
+  p: Platform;
+  profile: Profile;
+  item: Item;
+  t: Tr;
 }) {
   const [detail, setDetail] = useState<Detail>(),
     [url, setUrl] = useState(""),
     [text, setText] = useState(""),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [loading, setLoading] = useState(true);
   const category = objectCategory(item.key);
   useEffect(() => {
     let active = true;
@@ -157,37 +283,48 @@ function Preview({
         const u = await p.api.links(profile.id, item.key, 300, "preview");
         if (active) setUrl(u);
       }
-    })().catch((e) => {
-      if (active) setError(e instanceof Error ? e.message : String(e));
-    });
+    })()
+      .catch((e) => {
+        if (active) setError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
     return () => {
       active = false;
       if (localUrl) URL.revokeObjectURL(localUrl);
     };
   }, [p, profile.id, item.key, category]);
   return (
-    <Modal title={nameOf(item.key)} open onClose={close} wide>
-      <div className="dialog-body stack">
-        <div className="media-preview">
-          {url && category === "image" ? (
-            <img src={url} alt={nameOf(item.key)} />
-          ) : url && category === "video" ? (
-            <video src={url} controls preload="metadata" />
-          ) : url && category === "audio" ? (
-            <audio src={url} controls preload="metadata" />
-          ) : url && category === "pdf" ? (
-            <iframe src={url} title={nameOf(item.key)} />
-          ) : text ? (
-            <pre>{text}</pre>
-          ) : (
-            <FileIcon item={item} size={45} />
-          )}
-        </div>
-        {error && (
-          <div className="notice error" role="alert">
-            {error}
-          </div>
+    <div className="preview-content">
+      <div className="media-preview">
+        {url && category === "image" ? (
+          <img
+            src={url}
+            alt={nameOf(item.key)}
+            onError={() => setError(t("Could not load this image", "无法加载此图片"))}
+          />
+        ) : url && category === "video" ? (
+          <video src={url} controls preload="metadata" />
+        ) : url && category === "audio" ? (
+          <audio src={url} controls preload="metadata" />
+        ) : url && category === "pdf" ? (
+          <iframe src={url} title={nameOf(item.key)} />
+        ) : category === "text" && !loading && !error ? (
+          <pre>{text}</pre>
+        ) : loading ? (
+          <span role="status">{t("Loading preview…", "正在加载预览…")}</span>
+        ) : (
+          <FileIcon item={item} size={45} />
         )}
+      </div>
+      {error && (
+        <div className="notice error" role="alert">
+          {error}
+        </div>
+      )}
+      <details className="preview-details">
+        <summary>{t("File information", "文件信息")}</summary>
         <dl className="detail-grid">
           <dt>{t("Object key", "对象路径")}</dt>
           <dd>{item.key}</dd>
@@ -208,16 +345,8 @@ function Preview({
               </div>
             ))}
         </dl>
-        <div className="row gap">
-          <button className="button primary" onClick={onDownload}>
-            <ArrowDownToLine size={15} /> {t("Download", "下载")}
-          </button>
-          <button className="button" onClick={onShare}>
-            <Link2 size={15} /> {t("Share", "分享")}
-          </button>
-        </div>
-      </div>
-    </Modal>
+      </details>
+    </div>
   );
 }
 function ActionModal({
@@ -465,45 +594,51 @@ export function Files({
   index?: Index;
   setIndex: (v: Index) => void;
 }) {
-  const [page, setPage] = useState<Page>({ items: [] }),
-    [cursor, setCursor] = useState<(string | undefined)[]>([undefined]),
-    [remote, setRemote] = useState(0),
+  const [directory, setDirectory] = useState<{ prefix: string; items: Item[] }>(),
     [local, setLocal] = useState(0);
   const [version, refresh] = useState(0),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
   const [query, setQuery] = useState(""),
-    [searching, setSearching] = useState(false),
+    [searchOpen, setSearchOpen] = useState(false),
+    [draft, setDraft] = useState(""),
     [sort, setSort] = useState<Sort>("newest"),
     [category, setCategory] = useState("");
   const [selected, setSelected] = useState<Map<string, Item>>(new Map()),
     [preview, setPreview] = useState<Item>(),
-    [share, setShare] = useState<Item>(),
+    [share, setShare] = useState<{ item: Item; previewLink?: string }>(),
     [action, setAction] = useState<Action>();
-  const [links, setLinks] = useState<{ name: string; url: string }[]>(),
-    [menu, setMenu] = useState<string>(),
+  const [menu, setMenu] = useState<string>(),
     [syncing, setSyncing] = useState(false);
-  const [fallbackCount, setFallbackCount] = useState(0);
   useEffect(() => {
-    setCursor([undefined]);
-    setRemote(0);
     setLocal(0);
     setSelected(new Map());
     setQuery("");
     setMenu(undefined);
-    setSearching(false);
-  }, [profile.id, prefix]);
-  const current = cursor[remote];
+    setSearchOpen(false);
+  }, [profile.id, prefix, prefs.pageSize]);
   useEffect(() => {
     if (!connected) return;
     let valid = true;
     setLoading(true);
     setError("");
-    void p.api
-      .list(profile.id, prefix, current)
-      .then((v) => {
-        if (valid) setPage(v);
-      })
+    async function loadDirectory() {
+      const items = new Map<string, Item>();
+      const cursors = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const page = await p.api.list(profile.id, prefix, cursor);
+        if (!valid) return;
+        for (const item of page.items) items.set(item.key, item);
+        cursor = page.next;
+        if (cursor) {
+          if (cursors.has(cursor)) throw new Error("The R2 cursor stopped advancing");
+          cursors.add(cursor);
+        }
+      } while (cursor);
+      setDirectory({ prefix, items: [...items.values()] });
+    }
+    void loadDirectory()
       .catch((e) => {
         if (valid) setError(e instanceof Error ? e.message : String(e));
       })
@@ -513,13 +648,18 @@ export function Files({
     return () => {
       valid = false;
     };
-  }, [p, profile.id, prefix, connected, current, version]);
+  }, [p, profile.id, prefix, connected, version]);
   useEffect(() => {
     if (!connected || !prefs.autoRefresh) return;
     const timer = setInterval(() => refresh((x) => x + 1), prefs.autoRefresh * 60_000);
     return () => clearInterval(timer);
   }, [connected, prefs.autoRefresh]);
-  const source = searching && query && index ? index.objects : page.items;
+  const source =
+    query && index
+      ? index.objects
+      : directory?.prefix === prefix
+        ? directory.items
+        : emptyDirectory;
   const sorted = useMemo(() => {
     const q = query.trim().toLowerCase();
     return source
@@ -537,9 +677,10 @@ export function Files({
           : a.modified.localeCompare(b.modified);
       });
   }, [source, query, category, sort]);
-  const shown = sorted.slice(local * PAGE_SIZE, (local + 1) * PAGE_SIZE),
-    localMax = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE)),
-    isIndexedSearch = !!(searching && query && index);
+  const localMax = Math.max(1, Math.ceil(sorted.length / prefs.pageSize)),
+    currentPage = Math.min(local, localMax - 1),
+    shown = sorted.slice(currentPage * prefs.pageSize, (currentPage + 1) * prefs.pageSize),
+    isIndexedSearch = !!(query && index);
   const all = shown.length > 0 && shown.every((x) => selected.has(x.key));
   const choose = (item: Item) =>
     setSelected((old) => {
@@ -556,28 +697,6 @@ export function Files({
         else n.set(x.key, x);
       return n;
     });
-  function next() {
-    if (local + 1 < localMax) {
-      setLocal(local + 1);
-      return;
-    }
-    if (page.next && !isIndexedSearch) {
-      setCursor((prev) => {
-        const p = [...prev];
-        p[remote + 1] = page.next;
-        return p;
-      });
-      setRemote(remote + 1);
-      setLocal(0);
-    }
-  }
-  function prev() {
-    if (local > 0) setLocal(local - 1);
-    else if (remote > 0) {
-      setRemote(remote - 1);
-      setLocal(0);
-    }
-  }
   async function sync() {
     setSyncing(true);
     const v = await run(() => p.api.scan(profile.id), t("Bucket synced", "存储桶已同步"));
@@ -589,42 +708,32 @@ export function Files({
   }
   async function download(items: Item[]) {
     if (!items.length) return;
-    if (p.capabilities.folders) {
-      await run(async () => {
-        const dir = await p.api.pickDestination();
-        if (!dir) return;
-        await p.api.download(profile.id, items, dir, prefix, prefs.replace);
-        notify(t("Added to transfers", "已加入传输队列"));
+    await run(async () => {
+      await p.api.download(profile.id, items, prefs.downloadFolder, prefix, prefs.replace, {
+        completion: prefs.downloadCompletion,
+        parallel: prefs.downloadParallel,
       });
-    } else {
-      const objects: Item[] = [];
-      for (const item of items) {
-        if (item.kind === "object") objects.push(item);
-        else {
-          const scan = index ?? (await run(() => p.api.scan(profile.id)));
-          if (scan)
-            objects.push(
-              ...scan.objects.filter((o) => o.key.startsWith(item.key) && !o.key.endsWith("/")),
-            );
-        }
-      }
-      const r = await run(() =>
-        Promise.all(
-          objects.slice(0, 100).map(async (item) => ({
-            name: item.key,
-            url: await p.api.links(profile.id, item.key, 900, "download"),
-          })),
-        ),
-      );
-      if (r) {
-        setFallbackCount(objects.length);
-        setLinks(r);
-      }
-    }
+      notify(t("Added to transfers", "已加入传输队列"));
+    });
   }
   const chosen = [...selected.values()];
+  const previewItems = preview ? sorted.filter((item) => item.kind === "object") : [];
+  const previewIndex = preview ? previewItems.findIndex((item) => item.key === preview.key) : -1;
+  const previewLink = (item: Item) =>
+    p.api.links(profile.id, item.key, 3600, profile.publicBase ? "public" : "signed");
+  const copyObjectLink = (item: Item) =>
+    run(
+      async () =>
+        copyText(p, formatLink(await previewLink(item), nameOf(item.key), prefs.shareFormat)),
+      t("Copied", "已复制"),
+    );
+  function singleAction(item: Item, action: "rename" | "delete") {
+    setPreview(undefined);
+    setMenu(undefined);
+    setSelected(new Map([[item.key, item]]));
+    setAction(action);
+  }
   const crumbs = prefix.split("/").filter(Boolean);
-  const hasNext = local + 1 < localMax || !!(page.next && !isIndexedSearch);
   return (
     <section
       className="files-section"
@@ -651,11 +760,11 @@ export function Files({
         </div>
         <div className="toolbar-actions">
           <button
-            className={"button " + (searching ? "selected" : "")}
+            className={"button " + (query ? "selected" : "")}
+            aria-haspopup="dialog"
             onClick={() => {
-              setSearching(!searching);
-              setQuery("");
-              setLocal(0);
+              setDraft(query);
+              setSearchOpen(true);
             }}
           >
             <Search size={15} /> {t("Search", "搜索", "検索", "검색")}
@@ -664,28 +773,48 @@ export function Files({
             <ArrowUpToLine size={15} /> {t("Upload", "上传", "アップロード", "업로드")}
           </button>
           <div className="segmented">
-            <IconButton
-              label={t("Grid", "网格", "グリッド", "격자")}
-              className={prefs.view === "grid" ? "active" : ""}
+            <button
+              type="button"
+              className={"button view-option " + (prefs.view === "grid" ? "active" : "")}
+              aria-label={t("Grid", "网格", "グリッド", "격자")}
+              aria-pressed={prefs.view === "grid"}
               onClick={() => setPrefs({ view: "grid" })}
             >
-              <Grid2X2 size={16} />
-            </IconButton>
-            <IconButton
-              label={t("List", "列表", "一覧", "목록")}
-              className={prefs.view === "list" ? "active" : ""}
+              <Grid2X2 size={15} />
+              <span className="toolbar-label">{t("Grid", "网格", "グリッド", "격자")}</span>
+            </button>
+            <button
+              type="button"
+              className={"button view-option " + (prefs.view === "list" ? "active" : "")}
+              aria-label={t("List", "列表", "一覧", "목록")}
+              aria-pressed={prefs.view === "list"}
               onClick={() => setPrefs({ view: "list" })}
             >
-              <List size={18} />
-            </IconButton>
+              <List size={17} />
+              <span className="toolbar-label">{t("List", "列表", "一覧", "목록")}</span>
+            </button>
           </div>
-          <IconButton
-            label={t("Refresh", "刷新")}
+          <button
+            type="button"
+            className="button"
+            aria-label={t("Refresh", "刷新")}
             disabled={!connected || loading}
             onClick={() => refresh((x) => x + 1)}
           >
-            <RefreshCw size={16} className={loading ? "spin" : ""} />
-          </IconButton>
+            <RefreshCw size={15} className={loading ? "spin" : ""} />
+            <span className="toolbar-label">{t("Refresh", "刷新")}</span>
+          </button>
+          <button
+            type="button"
+            className={"button " + (all ? "selected" : "")}
+            aria-label={t("Select all", "全选", "全選択", "전체 선택")}
+            aria-pressed={all}
+            disabled={!shown.length}
+            onClick={selectAll}
+          >
+            <Check size={15} />
+            <span className="toolbar-label">{t("Select all", "全选", "全選択", "전체 선택")}</span>
+          </button>
           <IconButton
             label={labels(t).folder}
             disabled={!connected}
@@ -695,34 +824,80 @@ export function Files({
           </IconButton>
         </div>
       </div>
-      {searching && (
-        <div className="searchbar">
-          <Search size={16} />
-          <input
-            autoFocus
-            aria-label={t("Search objects", "搜索对象")}
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
+      {searchOpen && (
+        <Modal open title={t("Search files", "搜索文件")} onClose={() => setSearchOpen(false)}>
+          <form
+            className="dialog-body stack"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              const term = draft.trim();
+              if (term && !index && connected) await sync();
+              setQuery(term);
               setLocal(0);
+              setSearchOpen(false);
             }}
-            placeholder={
-              index ? t("Search the bucket", "搜索整个存储桶") : t("Search this page", "搜索当前页")
-            }
-          />
-          {!index && (
-            <button className="button" disabled={syncing} onClick={() => void sync()}>
-              {t("Index bucket", "索引整个存储桶")}
-            </button>
-          )}
-        </div>
+          >
+            <input
+              autoFocus
+              aria-label={t("Search objects", "搜索对象")}
+              placeholder={t("Enter a filename to search…", "输入文件名进行搜索…")}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+            <div className="search-options">
+              <select
+                aria-label={t("Filter files", "筛选文件")}
+                value={category}
+                onChange={(e) => {
+                  setCategory(e.target.value);
+                  setLocal(0);
+                }}
+              >
+                <option value="">{t("All types", "所有类型")}</option>
+                {["image", "video", "audio", "pdf", "text", "file"].map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label={t("Sort files", "文件排序")}
+                value={sort}
+                onChange={(e) => {
+                  setSort(e.target.value as Sort);
+                  setLocal(0);
+                }}
+              >
+                <option value="newest">{t("Newest first", "最新优先")}</option>
+                <option value="oldest">{t("Oldest first", "最早优先")}</option>
+                <option value="name">{t("Name", "名称")}</option>
+                <option value="size">{t("Largest first", "最大优先")}</option>
+              </select>
+            </div>
+            <div className="row end gap">
+              {query && (
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => {
+                    setQuery("");
+                    setCategory("");
+                    setLocal(0);
+                    setSearchOpen(false);
+                  }}
+                >
+                  {t("Clear search", "清除搜索")}
+                </button>
+              )}
+              <button type="submit" className="button primary" disabled={syncing || !draft.trim()}>
+                <Search size={15} /> {t("Search", "搜索")}
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
-      <div className="file-subbar">
-        <label className="check">
-          <input type="checkbox" checked={all} onChange={selectAll} />{" "}
-          {t("Select all", "全选", "全選択", "전체 선택")}
-        </label>
-        {chosen.length > 0 && (
+      {chosen.length > 0 && (
+        <div className="file-subbar">
           <div className="batch-bar">
             <b>
               {chosen.length} {t("selected", "项已选")}
@@ -741,37 +916,8 @@ export function Files({
                 );
               })}
           </div>
-        )}
-        <div className="spacer" />
-        <select
-          aria-label={t("Filter files", "筛选文件")}
-          value={category}
-          onChange={(e) => {
-            setCategory(e.target.value);
-            setLocal(0);
-          }}
-        >
-          <option value="">{t("All types", "所有类型")}</option>
-          {["image", "video", "audio", "pdf", "text", "file"].map((x) => (
-            <option key={x} value={x}>
-              {x}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label={t("Sort files", "文件排序")}
-          value={sort}
-          onChange={(e) => {
-            setSort(e.target.value as Sort);
-            setLocal(0);
-          }}
-        >
-          <option value="newest">{t("Newest first", "最新优先")}</option>
-          <option value="oldest">{t("Oldest first", "最早优先")}</option>
-          <option value="name">{t("Name", "名称")}</option>
-          <option value="size">{t("Largest first", "最大优先")}</option>
-        </select>
-      </div>
+        </div>
+      )}
       <div className="file-scroll">
         {!connected ? (
           <Empty
@@ -835,7 +981,14 @@ export function Files({
                         nameOf(item.key)
                       }
                     >
-                      <Thumb p={p} profile={profile} item={item} prefs={prefs} t={t} />
+                      <Thumb
+                        key={String(prefs.preview) + (item.etag ?? item.modified)}
+                        p={p}
+                        profile={profile}
+                        item={item}
+                        prefs={prefs}
+                        t={t}
+                      />
                     </button>
                   ) : null}
                   <button
@@ -861,12 +1014,32 @@ export function Files({
                   )}
                   <div className="file-actions">
                     {item.kind === "object" && (
-                      <IconButton
-                        label={t("Share", "分享") + " " + nameOf(item.key)}
-                        onClick={() => setShare(item)}
-                      >
-                        <Link2 size={15} />
-                      </IconButton>
+                      <>
+                        <IconButton
+                          label={t("Download", "下载") + " " + nameOf(item.key)}
+                          onClick={() => void download([item])}
+                        >
+                          <ArrowDownToLine size={15} />
+                        </IconButton>
+                        <IconButton
+                          label={t("Copy link", "复制链接") + " " + nameOf(item.key)}
+                          onClick={() => void copyObjectLink(item)}
+                        >
+                          <Link2 size={15} />
+                        </IconButton>
+                        <IconButton
+                          label={labels(t).rename + " " + nameOf(item.key)}
+                          onClick={() => singleAction(item, "rename")}
+                        >
+                          <Pencil size={15} />
+                        </IconButton>
+                        <IconButton
+                          label={labels(t).delete + " " + nameOf(item.key)}
+                          onClick={() => singleAction(item, "delete")}
+                        >
+                          <Trash2 size={15} />
+                        </IconButton>
+                      </>
                     )}
                     <IconButton
                       label={t("More actions", "更多操作") + " " + nameOf(item.key)}
@@ -877,6 +1050,16 @@ export function Files({
                     </IconButton>
                     {menu === item.key && (
                       <div className="item-menu">
+                        {item.kind === "object" && (
+                          <button
+                            onClick={() => {
+                              setMenu(undefined);
+                              setShare({ item });
+                            }}
+                          >
+                            <QrCode size={15} /> {t("Share", "分享")}
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             setMenu(undefined);
@@ -931,20 +1114,29 @@ export function Files({
           </button>
         </div>
         <div className="row gap">
-          <IconButton
-            label={t("Previous page", "上一页")}
-            disabled={remote === 0 && local === 0}
-            onClick={prev}
+          <button
+            className="button pager-button"
+            type="button"
+            aria-label={t("Previous page", "上一页")}
+            disabled={currentPage === 0}
+            onClick={() => setLocal(currentPage - 1)}
           >
-            <ChevronLeft size={15} />
-          </IconButton>
+            <ChevronLeft size={14} />
+            <span className="pager-label">{t("Previous page", "上一页")}</span>
+          </button>
           <span>
-            {t("Page", "页")} {remote * Math.ceil(200 / PAGE_SIZE) + local + 1} · {shown.length}{" "}
-            {t("items", "项")}
+            {t("Page", "页")} {currentPage + 1} / {localMax} · {sorted.length} {t("items", "项")}
           </span>
-          <IconButton label={t("Next page", "下一页")} disabled={!hasNext} onClick={next}>
-            <ChevronRight size={15} />
-          </IconButton>
+          <button
+            className="button pager-button"
+            type="button"
+            aria-label={t("Next page", "下一页")}
+            disabled={currentPage + 1 >= localMax}
+            onClick={() => setLocal(currentPage + 1)}
+          >
+            <span className="pager-label">{t("Next page", "下一页")}</span>
+            <ChevronRight size={14} />
+          </button>
         </div>
       </footer>
       {preview && (
@@ -954,21 +1146,40 @@ export function Files({
           item={preview}
           t={t}
           close={() => setPreview(undefined)}
-          onShare={() => {
-            setShare(preview);
-            setPreview(undefined);
-          }}
+          onShare={() =>
+            void run(async () => {
+              const link = await previewLink(preview);
+              setShare({ item: preview, previewLink: link });
+              setPreview(undefined);
+            })
+          }
+          onCopy={() => void copyObjectLink(preview)}
+          onView={() => void run(async () => p.api.openExternal(await previewLink(preview)))}
           onDownload={() => void download([preview])}
+          onRename={() => singleAction(preview, "rename")}
+          onDelete={() => singleAction(preview, "delete")}
+          onNavigate={
+            previewIndex >= 0 && previewItems.length > 1
+              ? (step) =>
+                  setPreview(
+                    previewItems[(previewIndex + step + previewItems.length) % previewItems.length],
+                  )
+              : undefined
+          }
         />
       )}
       {share && (
         <ShareDialog
           platform={p}
           profile={profile}
-          item={share}
+          item={share.item}
+          initialLink={share.previewLink}
           prefs={prefs}
           t={t}
-          close={() => setShare(undefined)}
+          close={() => {
+            if (share.previewLink) setPreview(share.item);
+            setShare(undefined);
+          }}
           notify={notify}
         />
       )}
@@ -988,32 +1199,6 @@ export function Files({
             return results;
           }}
         />
-      )}
-      {links && (
-        <Modal title={t("Download files", "下载文件")} open onClose={() => setLinks(undefined)}>
-          <div className="dialog-body stack">
-            {fallbackCount > links.length && (
-              <div className="notice">
-                {t(
-                  "The first 100 links are shown. Use a browser with directory access for larger batches.",
-                  "仅显示前 100 个链接。批量下载更多文件请使用支持目录访问的浏览器。",
-                )}
-              </div>
-            )}
-            {links.map((x) => (
-              <a
-                className="button truncate"
-                download={nameOf(x.name)}
-                key={x.name}
-                href={x.url}
-                rel="noreferrer"
-              >
-                <ArrowDownToLine size={14} />
-                {x.name}
-              </a>
-            ))}
-          </div>
-        </Modal>
       )}
     </section>
   );

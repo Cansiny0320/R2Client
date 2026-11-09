@@ -1,5 +1,7 @@
 # R2Client 设计
 
+> 历史方案：Web 部分已被[桌面专用设计](../specs/2026-11-08-r2client-desktop-only-design.md)取代。
+
 R2Client 是独立实现的 MIT 开源 Cloudflare R2 管理器。Windows、macOS、Linux 使用 Electron，Web 和桌面共用 TypeScript/React 界面。参考产品的安装包和文档只用于核对能力；本项目不包含其源码、素材、账号或激活逻辑。
 
 - 四端：多账户多桶、目录与虚拟列表、文件详情、索引和全桶搜索、预览及缩略图、所有文件和目录的批量操作、前后缀/序列/替换/正则重命名、属性编辑、传输与同步、对象统计、可核对的 SHA-256 去重、主题/缩放和中英日韩界面。

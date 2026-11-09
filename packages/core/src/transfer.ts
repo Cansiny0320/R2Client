@@ -1,5 +1,13 @@
-import { errorText, notFound, partSize } from "./keys";
-import type { Driver, Job, ObjectStore, Part, SourceReader } from "./model";
+import {
+  DEFAULT_UPLOAD,
+  downloadConcurrency,
+  errorText,
+  MiB,
+  notFound,
+  partSize,
+  uploadTuning,
+} from "./keys";
+import type { Driver, Job, ObjectStore, Part, SourceReader, UploadTuning } from "./model";
 
 export async function sha256(bytes: Uint8Array) {
   const copy = Uint8Array.from(bytes);
@@ -30,12 +38,15 @@ async function retry<T>(fn: () => Promise<T>, signal: AbortSignal): Promise<T> {
   }
 }
 
+type PartSlot = <T>(task: () => Promise<T>) => Promise<T>;
+
 export async function upload(
   job: Job,
   source: SourceReader,
   store: ObjectStore,
   save: () => Promise<void>,
   signal: AbortSignal,
+  slot: PartSlot = (task) => task(),
 ) {
   if (job.source?.size !== source.size || job.source?.modified !== source.modified)
     throw new Error("Select the original file before resuming");
@@ -50,15 +61,21 @@ export async function upload(
     return;
   }
   if (!job.replace && prev) throw new Error("An object with this name already exists");
-  const type = source.type || "application/octet-stream",
-    size = job.partSize ?? partSize(source.size);
-  if (source.size <= size && !job.uploadId) {
-    const data = await source.read(0, source.size);
-    if (data.length !== source.size) throw new Error("Source file changed while reading");
-    await retry(
-      () => store.put(job.key, data, type, !!job.replace, signal, { "r2client-job": job.id }),
-      signal,
-    ).catch(committed);
+  const tuning = job.uploadTuning ? uploadTuning(job.uploadTuning) : undefined;
+  const type = source.type || "application/octet-stream";
+  const size = job.partSize ?? partSize(source.size, tuning ? tuning.chunkMiB * MiB : undefined);
+  if (
+    source.size <= (job.partSize ?? (tuning ? tuning.thresholdMiB * MiB : size)) &&
+    !job.uploadId
+  ) {
+    await slot(async () => {
+      const data = await source.read(0, source.size);
+      if (data.length !== source.size) throw new Error("Source file changed while reading");
+      await retry(
+        () => store.put(job.key, data, type, !!job.replace, signal, { "r2client-job": job.id }),
+        signal,
+      ).catch(committed);
+    });
     job.done = job.total;
     return;
   }
@@ -83,7 +100,7 @@ export async function upload(
     job.parts = [];
     job.done = 0;
     await save();
-    return upload(job, source, store, save, signal);
+    return upload(job, source, store, save, signal, slot);
   }
   const local = new Map((job.parts ?? []).map((p) => [p.number, p]));
   const onR2 = new Map(remote.map((p) => [p.number, p.etag]));
@@ -93,29 +110,32 @@ export async function upload(
   let firstError: unknown;
   job.done = 0;
   await Promise.all(
-    Array.from({ length: Math.min(count, 2) }, async () => {
+    Array.from({ length: Math.min(count, tuning?.perFile ?? 2) }, async () => {
       while (index <= count && !firstError) {
         try {
           signal.throwIfAborted();
           const number = index++,
             from = (number - 1) * size,
             to = Math.min(from + size, source.size);
-          const data = await source.read(from, to);
-          if (data.length !== to - from) throw new Error("Source file changed while reading");
-          const digest = await sha256(data),
-            before = local.get(number);
-          if (before && before.digest !== digest)
-            throw new Error("Source contents changed; cancel this job and create a new one");
-          const etag =
-            before && before.etag === onR2.get(number)
-              ? before.etag
-              : await retry(() => store.putPart(job.key, id, number, data, signal), signal);
-          const part = { number, etag, digest, bytes: data.length };
-          local.set(number, part);
-          accepted.set(number, part);
-          job.parts = Array.from(local.values());
-          job.done += data.length;
-          await save();
+          await slot(async () => {
+            if (firstError) return;
+            const data = await source.read(from, to);
+            if (data.length !== to - from) throw new Error("Source file changed while reading");
+            const digest = await sha256(data),
+              before = local.get(number);
+            if (before && before.digest !== digest)
+              throw new Error("Source contents changed; cancel this job and create a new one");
+            const etag =
+              before && before.etag === onR2.get(number)
+                ? before.etag
+                : await retry(() => store.putPart(job.key, id, number, data, signal), signal);
+            const part = { number, etag, digest, bytes: data.length };
+            local.set(number, part);
+            accepted.set(number, part);
+            job.parts = Array.from(local.values());
+            job.done += data.length;
+            await save();
+          });
         } catch (e) {
           firstError ??= e;
         }
@@ -193,7 +213,10 @@ export class Transfers {
   readonly jobs: Job[];
   private active = new Map<string, { abort: AbortController; promise: Promise<void> }>();
   private pendingSave = Promise.resolve();
-  private parallel = 2;
+  private tuning: UploadTuning = { ...DEFAULT_UPLOAD };
+  private downloadParallel = 2;
+  private activeParts = 0;
+  private partWaiters = new Set<() => void>();
   constructor(
     private driver: Driver,
     private getStore: (id: string) => Promise<ObjectStore>,
@@ -204,22 +227,59 @@ export class Transfers {
       j.state === "running" || j.state === "queued" ? { ...j, state: "paused" } : j,
     );
   }
+  configure(upload?: number | UploadTuning, download?: number) {
+    if (upload !== undefined) this.tuning = uploadTuning(upload);
+    if (download !== undefined) this.downloadParallel = downloadConcurrency(download);
+    for (const notify of this.partWaiters) notify();
+  }
+  private async partSlot<T>(signal: AbortSignal, task: () => Promise<T>) {
+    while (this.activeParts >= this.tuning.global) {
+      signal.throwIfAborted();
+      await new Promise<void>((resolve) => {
+        const wake = () => {
+          this.partWaiters.delete(wake);
+          signal.removeEventListener("abort", wake);
+          resolve();
+        };
+        this.partWaiters.add(wake);
+        signal.addEventListener("abort", wake, { once: true });
+      });
+    }
+    signal.throwIfAborted();
+    this.activeParts++;
+    try {
+      return await task();
+    } finally {
+      this.activeParts--;
+      for (const notify of this.partWaiters) notify();
+    }
+  }
   persist() {
     const snapshot = structuredClone(this.jobs);
     const pending = this.pendingSave.catch(() => {}).then(() => this.driver.save("jobs", snapshot));
     this.pendingSave = pending;
     return pending;
   }
-  async add(jobs: Job[], concurrency?: number) {
-    if (concurrency !== undefined)
-      this.parallel = Math.max(1, Math.min(5, Math.trunc(concurrency) || 2));
+  async add(jobs: Job[], concurrency?: number | UploadTuning, download?: number) {
+    this.configure(concurrency, download);
     this.jobs.unshift(...jobs);
     await this.persist();
     this.pump();
   }
   private pump() {
-    while (this.active.size < this.parallel) {
-      const job = this.jobs.find((j) => j.state === "queued" && !this.active.has(j.id));
+    while (true) {
+      const runningUploads = this.jobs.filter(
+        (j) => j.direction === "upload" && this.active.has(j.id),
+      ).length;
+      const runningDownloads = this.active.size - runningUploads;
+      const job = this.jobs.find(
+        (j) =>
+          j.state === "queued" &&
+          !this.active.has(j.id) &&
+          (j.direction === "upload"
+            ? runningUploads < Math.min(this.tuning.files, this.tuning.global)
+            : runningDownloads < this.downloadParallel),
+      );
       if (!job) return;
       const abort = new AbortController();
       job.state = "running";
@@ -242,7 +302,7 @@ export class Transfers {
       if (job.direction === "upload") {
         const source = job.source && (await this.driver.source(job.source.id));
         if (!source) throw new Error("Reselect the original upload file");
-        await upload(job, source, store, save, signal);
+        await upload(job, source, store, save, signal, (task) => this.partSlot(signal, task));
       } else await download(job, this.driver, store, save, signal);
       job.state = "completed";
       job.error = undefined;

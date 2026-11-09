@@ -40,7 +40,6 @@ Copy|コピー|복사
 Copy link|リンクをコピー|링크 복사
 Copy links|リンクを一括コピー|링크 일괄 복사
 Copy manifest|一覧をコピー|목록 복사
-Credentials stay in this tab. Set the bucket CORS policy for this site.|認証情報はこのタブだけに保持されます。このサイトをバケットの CORS に追加してください。|자격 증명은 이 탭에만 유지됩니다. 버킷 CORS에 이 사이트를 추가하세요.
 Current objects by modification date|更新日別のオブジェクト数|수정 날짜별 객체 수
 Custom metadata (key=value per line)|カスタムメタデータ（1 行に key=value）|사용자 지정 메타데이터(한 줄에 key=value)
 Custom order|カスタム順|사용자 지정 순서
@@ -198,13 +197,10 @@ Sync snapshots|同期の履歴|동기화 기록
 Sync to a local folder|ローカルフォルダーに同期|로컬 폴더에 동기화
 System|システム設定|시스템 설정
 Temporary credentials or public URL|一時認証情報または公開 URL|임시 자격 증명 또는 공개 URL
-The first 100 links are shown. Use a browser with directory access for larger batches.|最初の 100 件を表示しています。さらにダウンロードする場合はフォルダーアクセス対応のブラウザーを使用してください。|처음 100개 링크가 표시됩니다. 더 많이 다운로드하려면 폴더 접근을 지원하는 브라우저를 사용하세요.
-The source must allow browser access.|配信元がブラウザーからのアクセスを許可している必要があります。|원본 사이트에서 브라우저 접근을 허용해야 합니다.
 This permanently deletes the selected objects. Folders include everything below them.|選択したオブジェクトを完全に削除します。フォルダー内のすべての項目が対象です。|선택한 객체를 영구 삭제합니다. 폴더의 모든 하위 항목도 삭제됩니다.
 Transfer progress|転送の進行状況|전송 진행률
 Transfers|転送|전송
 Upload name|アップロード名|업로드 이름
-Use Chrome or Edge for browser folder access, or use the desktop client.|フォルダーを操作するには Chrome、Edge、またはデスクトップ版を使用してください。|폴더에 접근하려면 Chrome, Edge 또는 데스크톱 버전을 사용하세요.
 Video codec|動画コーデック|비디오 코덱
 Working…|処理中…|처리 중…
 Workspace|作業領域|작업 공간

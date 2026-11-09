@@ -1,3 +1,4 @@
+import piexif from "piexifjs";
 import type { Preset } from "@r2client/core";
 
 export function ffmpegArgs(source: string, output: string, p: Preset, category: string) {
@@ -30,7 +31,7 @@ export function ffmpegArgs(source: string, output: string, p: Preset, category: 
   ];
   if (p.autoRotate === false) args.push("-noautorotate");
   args.push("-i", source);
-  if (p.stripMetadata) args.push("-map_metadata", "-1");
+  if (category === "image" || p.stripMetadata) args.push("-map_metadata", "-1");
   if (category !== "audio" && (p.width || p.height)) {
     const w = Math.max(2, Math.min(8192, Math.trunc(p.width || 8192)));
     const h = Math.max(2, Math.min(8192, Math.trunc(p.height || 8192)));
@@ -108,4 +109,35 @@ export function ffmpegArgs(source: string, output: string, p: Preset, category: 
     if (p.format === "mp4") args.push("-movflags", "+faststart");
   }
   return [...args, output];
+}
+
+// Read only JPEG header segments; APP1 uses a 16-bit length. Stop at the first scan.
+export function jpegExif(header: Buffer) {
+  if (header[0] !== 0xff || header[1] !== 0xd8) return;
+  for (let offset = 2; offset + 4 <= header.length;) {
+    if (header[offset++] !== 0xff) break;
+    while (header[offset] === 0xff) offset++;
+    const marker = header[offset++];
+    if (marker === 0xda || marker === 0xd9 || offset + 2 > header.length) break;
+    const size = header.readUInt16BE(offset);
+    if (size < 2 || offset + size > header.length) break;
+    const body = header.subarray(offset + 2, offset + size);
+    if (marker === 0xe1 && body.subarray(0, 6).equals(Buffer.from("Exif\0\0"))) return body;
+    offset += size;
+  }
+}
+
+export function restoreJpegExif(input: Buffer, output: Buffer, p: Preset) {
+  const exif = jpegExif(input);
+  if (!exif || p.metadataMode === "remove_all" || !p.metadataMode) return output;
+  const tags = piexif.load(exif.toString("latin1"));
+  if (p.metadataMode === "remove_gps") {
+    tags.GPS = {};
+    // The embedded thumbnail and vendor data are opaque and may carry their own location.
+    delete tags.thumbnail;
+    tags["1st"] = {};
+    delete tags.Exif?.[piexif.ExifIFD.MakerNote];
+  }
+  if (p.autoRotate !== false) (tags["0th"] ??= {})[piexif.ImageIFD.Orientation] = 1;
+  return Buffer.from(piexif.insert(piexif.dump(tags), output.toString("latin1")), "latin1");
 }

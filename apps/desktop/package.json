@@ -11,18 +11,30 @@
   "type": "module",
   "main": "dist/main.cjs",
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "build": "vite build && node scripts/build.mjs",
     "start": "electron .",
     "package": "electron-builder --publish never"
   },
-  "dependencies": {},
+  "dependencies": {
+    "piexifjs": "1.0.6"
+  },
   "devDependencies": {
     "@r2client/core": "workspace:*",
     "@r2client/s3": "workspace:*",
+    "@r2client/ui": "workspace:*",
+    "@tailwindcss/vite": "latest",
+    "@types/piexifjs": "^1.0.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "latest",
     "electron": "latest",
     "electron-builder": "^26",
     "esbuild": "latest",
-    "png-to-ico": "latest"
+    "png-to-ico": "latest",
+    "react": "^19",
+    "react-dom": "^19",
+    "tailwindcss": "latest",
+    "vite": "^8"
   },
   "build": {
     "appId": "top.cansiny.r2client",
@@ -55,7 +67,12 @@
         "nsis"
       ]
     },
-    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "nsis": {
+      "shortcutName": "R2Client Open Source",
+      "uninstallDisplayName": "R2Client Open Source",
+      "createDesktopShortcut": false
+    }
   },
   "productName": "R2Client"
 }

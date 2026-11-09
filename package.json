@@ -3,14 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "pnpm --filter @r2client/web dev",
-    "build": "pnpm --filter @r2client/web build && pnpm --filter @r2client/desktop build",
+    "build": "pnpm --filter @r2client/desktop build",
     "check": "tsc --noEmit && vp lint",
     "format": "vp fmt",
     "test": "tsx --test tests/*.test.ts",
-    "test:browser": "playwright test",
     "desktop:dev": "pnpm build && pnpm --filter @r2client/desktop start",
-    "desktop:package": "pnpm build && pnpm --filter @r2client/desktop package"
+    "desktop:package": "pnpm build && pnpm --filter @r2client/desktop package",
+    "test:renderer": "playwright test"
   },
   "devDependencies": {
     "@playwright/test": "latest",

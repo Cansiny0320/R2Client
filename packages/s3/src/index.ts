@@ -44,6 +44,7 @@ export class S3Store implements ObjectStore {
     ContinuationToken?: string,
     recursive = false,
     abortSignal?: AbortSignal,
+    limit = 200,
   ) {
     if (Prefix) checkKey(Prefix);
     const r = await this.client.send(
@@ -52,7 +53,7 @@ export class S3Store implements ObjectStore {
         Prefix,
         ContinuationToken,
         Delimiter: recursive ? undefined : "/",
-        MaxKeys: 200,
+        MaxKeys: limit,
         EncodingType: "url",
       }),
       { abortSignal },
@@ -138,8 +139,7 @@ export class S3Store implements ObjectStore {
       new UploadPartCommand({ ...this.base(key), UploadId, PartNumber, Body }),
       { abortSignal },
     );
-    if (!r.ETag)
-      throw new Error("Missing part ETag. In a browser expose ETag in the R2 CORS settings.");
+    if (!r.ETag) throw new Error("R2 did not return a part ETag.");
     return r.ETag;
   }
   async parts(key: string, UploadId: string, abortSignal?: AbortSignal) {

@@ -1,19 +1,21 @@
 import { sha256 as streamHash } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { DemoStore, demoProfile } from "./demo";
 import {
   checkKey,
   checkProfile,
+  downloadConcurrency,
   errorText,
   joined,
   notFound,
   publicLink,
   safeRelative,
+  uploadTuning,
 } from "./keys";
 import type {
   Api,
   Connection,
   Driver,
+  DownloadCompletion,
   Index,
   Item,
   Job,
@@ -22,8 +24,10 @@ import type {
   Outcome,
   Preset,
   Profile,
+  SavedAccount,
   Schedule,
   Source,
+  UploadTuning,
 } from "./model";
 import { Transfers } from "./transfer";
 
@@ -45,10 +49,10 @@ export async function listAll(store: ObjectStore, prefix = "") {
 
 export class Engine implements Api {
   private profiles: Profile[] = [];
+  private accounts: SavedAccount[] = [];
   private staged: Source[] = [];
   private scheduled: Schedule[] = [];
   private scheduleTick = new Map<string, number>();
-  private readonly demo = new DemoStore();
   private queues!: Transfers;
   private readonly initializing: Promise<void>;
   private readonly scans = new Map<string, Promise<Index>>();
@@ -57,13 +61,25 @@ export class Engine implements Api {
     this.initializing = this.init();
   }
   private async init() {
-    const [profiles, stages, jobs, schedules] = await Promise.all([
-      this.driver.load<Profile[]>("profiles"),
-      this.driver.load<Source[]>("stages"),
-      this.driver.load<Job[]>("jobs"),
-      this.driver.load<Schedule[]>("schedules"),
-    ]);
-    this.profiles = profiles ?? [demoProfile];
+    const [profiles, stages, jobs, schedules, accounts, uploadConfig, downloadConfig] =
+      await Promise.all([
+        this.driver.load<Profile[]>("profiles"),
+        this.driver.load<Source[]>("stages"),
+        this.driver.load<Job[]>("jobs"),
+        this.driver.load<Schedule[]>("schedules"),
+        this.driver.load<SavedAccount[]>("accounts"),
+        this.driver.load<UploadTuning>("upload-tuning"),
+        this.driver.load<number>("download-tuning"),
+      ]);
+    this.profiles = (profiles ?? []).filter((profile) => !profile.demo);
+    this.accounts = [...(accounts ?? [])];
+    for (const profile of this.profiles) {
+      const id = profile.savedAccountId ?? profile.id;
+      if (!this.accounts.some((a) => a.id === id)) {
+        const { label, accountId, jurisdiction } = profile;
+        this.accounts.push({ id, label, accountId, jurisdiction });
+      }
+    }
     this.staged = stages ?? [];
     this.scheduled = schedules ?? [];
     this.queues = new Transfers(
@@ -72,8 +88,23 @@ export class Engine implements Api {
       jobs ?? [],
       async (job) => {
         if (job.source) await this.releaseIdleSource(job.source.id);
+        if (job.state === "completed" && job.destination && job.downloadBatch) {
+          const { id, count, action } = job.downloadBatch;
+          const batch = this.queues.jobs.filter((entry) => entry.downloadBatch?.id === id);
+          if (
+            action !== "none" &&
+            batch.length === count &&
+            batch.every((entry) => entry.state === "completed")
+          ) {
+            // Clear the marker before side effects; concurrent completions cannot open duplicate windows.
+            for (const entry of batch) entry.downloadBatch = undefined;
+            await this.queues.persist();
+            await this.driver.downloadCompleted?.(job.destination, count, action).catch(() => {});
+          }
+        }
       },
     );
+    this.queues.configure(uploadConfig, downloadConfig);
   }
   private async releaseIdleSource(id: string) {
     if (
@@ -93,19 +124,25 @@ export class Engine implements Api {
   private async bucket(id: string) {
     await this.initializing;
     const p = this.profile(id);
-    if (p.demo) return this.demo;
-    const c = await this.driver.getSecret(id);
+    const c = await this.driver.getSecret(p.savedAccountId ?? p.id);
     if (!c) throw new Error("Enter the bucket credentials to connect");
     return this.driver.store(p, c);
   }
   async snapshot() {
     await this.initializing;
-    const connected = await Promise.all(
-      this.profiles.map(async (p) => (p.demo || (await this.driver.getSecret(p.id)) ? p.id : "")),
+    const available = await Promise.all(
+      this.accounts.map(async (account) =>
+        (await this.driver.getSecret(account.id)) ? account : undefined,
+      ),
     );
+    const accounts = available.filter((account): account is SavedAccount => !!account);
+    const availableIds = new Set(accounts.map((account) => account.id));
     return structuredClone({
       profiles: this.profiles,
-      connected: connected.filter(Boolean),
+      accounts,
+      connected: this.profiles
+        .filter((p) => availableIds.has(p.savedAccountId ?? p.id))
+        .map((p) => p.id),
       jobs: this.queues.jobs,
       stages: this.staged,
       platform: this.driver.platform,
@@ -114,8 +151,7 @@ export class Engine implements Api {
   async connect(input: Connection) {
     await this.initializing;
     const { id, label, accountId, bucket, jurisdiction, publicBase, credentials, remember } = input;
-    if (id && (!this.profiles.some((p) => p.id === id) || this.profile(id).demo))
-      throw new Error("Unknown profile");
+    if (id && !this.profiles.some((p) => p.id === id)) throw new Error("Unknown profile");
     const p: Profile = {
       id: id || uuid(),
       label: label.trim(),
@@ -132,19 +168,44 @@ export class Engine implements Api {
         old.bucket !== p.bucket ||
         old.jurisdiction !== p.jurisdiction);
     if (changed) throw new Error("Add a separate connection for a different bucket");
-    const c =
-      credentials.accessKeyId.trim() && credentials.secretAccessKey.trim()
-        ? {
-            accessKeyId: credentials.accessKeyId.trim(),
-            secretAccessKey: credentials.secretAccessKey.trim(),
-            sessionToken: credentials.sessionToken?.trim() || undefined,
-          }
-        : id
-          ? await this.driver.getSecret(id)
-          : undefined;
+    const reference = input.reuseCredentialsFrom;
+    const referencedProfile = this.profiles.find((p) => p.id === reference);
+    const reuse = reference
+      ? this.accounts.find((a) => a.id === (referencedProfile?.savedAccountId ?? reference))
+      : undefined;
+    if (reference && !reuse) throw new Error("Saved account not found");
+    if (reuse && (reuse.accountId !== p.accountId || reuse.jurisdiction !== p.jurisdiction))
+      throw new Error("Select credentials for the same account and jurisdiction");
+    const supplied = !!credentials.accessKeyId.trim() || !!credentials.secretAccessKey.trim();
+    if (supplied && !(credentials.accessKeyId.trim() && credentials.secretAccessKey.trim()))
+      throw new Error("An access key and secret key are required");
+    const existingAccount = old?.savedAccountId ?? old?.id;
+    const c = supplied
+      ? {
+          accessKeyId: credentials.accessKeyId.trim(),
+          secretAccessKey: credentials.secretAccessKey.trim(),
+          sessionToken: credentials.sessionToken?.trim() || undefined,
+        }
+      : existingAccount || reuse
+        ? await this.driver.getSecret(reuse?.id ?? existingAccount!)
+        : undefined;
     if (!c) throw new Error("An access key and secret key are required");
     await this.driver.store(p, c).list("");
-    await this.driver.setSecret(p.id, c, !!remember);
+    const retained = !supplied && remember ? (reuse?.id ?? existingAccount) : undefined;
+    const credentialId = retained ?? (old ? uuid() : p.id);
+    if (credentialId !== p.id) p.savedAccountId = credentialId;
+    const account = {
+      id: credentialId,
+      label: p.label,
+      accountId: p.accountId,
+      jurisdiction: p.jurisdiction,
+    };
+    if (!reuse || !retained || old) await this.driver.setSecret(credentialId, c, !!remember);
+    const accounts = this.accounts.some((a) => a.id === account.id)
+      ? this.accounts
+      : [...this.accounts, account];
+    await this.driver.save("accounts", accounts);
+    this.accounts = accounts;
     this.profiles = id ? this.profiles.map((v) => (v.id === id ? p : v)) : [...this.profiles, p];
     await this.driver.save("profiles", this.profiles);
   }
@@ -155,13 +216,24 @@ export class Engine implements Api {
     );
     if (jobs.length)
       throw new Error("Cancel or finish this bucket's transfers before removing its connection");
+    // Store the legacy account before removing its last source of metadata.
+    await this.driver.save("accounts", this.accounts);
     this.profiles = this.profiles.filter((p) => p.id !== id);
     this.scheduled = this.scheduled.filter((s) => s.profileId !== id);
     await Promise.all([
-      this.driver.setSecret(id, undefined, false),
       this.driver.save("profiles", this.profiles),
       this.driver.save("schedules", this.scheduled),
     ]);
+  }
+  async forgetAccount(id: string) {
+    await this.initializing;
+    if (!this.accounts.some((account) => account.id === id)) return;
+    if (this.profiles.some((profile) => (profile.savedAccountId ?? profile.id) === id))
+      throw new Error("Remove the connected buckets before forgetting this account");
+    await this.driver.setSecret(id, undefined, false);
+    const accounts = this.accounts.filter((account) => account.id !== id);
+    await this.driver.save("accounts", accounts);
+    this.accounts = accounts;
   }
   async reorder(ids: string[]) {
     await this.initializing;
@@ -171,7 +243,7 @@ export class Engine implements Api {
     await this.driver.save("profiles", this.profiles);
   }
   async list(id: string, prefix: string, cursor?: string) {
-    return (await this.bucket(id)).list(prefix, cursor);
+    return (await this.bucket(id)).list(prefix, cursor, false, undefined, 1000);
   }
   async detail(id: string, key: string) {
     return (await this.bucket(id)).head(checkKey(key));
@@ -368,9 +440,9 @@ export class Engine implements Api {
     for (const s of sources) {
       const src = await this.driver.source(s.id);
       if (!src) throw new Error("File was not selected or has expired");
-      const { id, name, size, type, modified } = src;
+      const { id, name, size, type, modified, processed } = src;
       if (!this.staged.some((x) => x.id === id))
-        this.staged.push({ id, name, size, type, modified });
+        this.staged.push({ id, name, size, type, modified, processed });
     }
     await this.driver.save("stages", this.staged);
   }
@@ -395,75 +467,102 @@ export class Engine implements Api {
   async upload(
     id: string,
     prefix: string,
-    entries: { id: string; name: string }[],
+    entries: { id: string; name: string; preset?: Preset }[],
     replace: boolean,
-    concurrency: number,
+    concurrency: number | UploadTuning,
     skipDuplicates = false,
   ) {
     const store = await this.bucket(id);
+    const tuning = uploadTuning(concurrency);
     const time = iso(),
       jobs: Job[] = [],
       keys = new Set<string>(),
       stagedHashes = new Set<string>();
     const objects = skipDuplicates ? await listAll(store, prefix) : [];
     let skipped = 0;
-    for (const entry of entries) {
-      const source = this.staged.find((s) => s.id === entry.id),
-        key = joined(prefix, entry.name);
-      const reader = source && (await this.driver.source(source.id));
-      if (!source || !reader) throw new Error("Reselect this file: " + entry.name);
-      if (skipDuplicates) {
-        const hash = streamHash.create(),
-          chunk = 8 * 1024 * 1024;
-        for (let i = 0; i < reader.size; i += chunk) {
-          const end = Math.min(i + chunk, reader.size),
-            data = await reader.read(i, end);
-          if (data.length !== end - i) throw new Error("Source file changed while reading");
-          hash.update(data);
+    const converted = new Set<string>();
+    let queued = false;
+    try {
+      for (const entry of entries) {
+        let source = this.staged.find((s) => s.id === entry.id);
+        let name = entry.name;
+        if (source && entry.preset && !source.processed) {
+          if (!this.driver.convert) throw new Error("Media processing is unavailable");
+          source = await this.driver.convert(source.id, entry.preset);
+          converted.add(source.id);
+          name = name.replace(/\.[^./]+$/, "") + "." + entry.preset.format;
         }
-        const digest = bytesToHex(hash.digest());
-        let duplicate = stagedHashes.has(digest);
-        if (!duplicate)
-          for (const item of objects)
-            if (
-              item.size === reader.size &&
-              !item.key.endsWith("/") &&
-              (await this.hashObject(id, store, item)) === digest
-            ) {
-              duplicate = true;
-              break;
-            }
-        if (duplicate) {
-          skipped++;
-          continue;
+        const key = joined(prefix, name);
+        const reader = source && (await this.driver.source(source.id));
+        if (!source || !reader) throw new Error("Reselect this file: " + entry.name);
+        if (skipDuplicates) {
+          const hash = streamHash.create(),
+            chunk = 8 * 1024 * 1024;
+          for (let i = 0; i < reader.size; i += chunk) {
+            const end = Math.min(i + chunk, reader.size),
+              data = await reader.read(i, end);
+            if (data.length !== end - i) throw new Error("Source file changed while reading");
+            hash.update(data);
+          }
+          const digest = bytesToHex(hash.digest());
+          let duplicate = stagedHashes.has(digest);
+          if (!duplicate)
+            for (const item of objects)
+              if (
+                item.size === reader.size &&
+                !item.key.endsWith("/") &&
+                (await this.hashObject(id, store, item)) === digest
+              ) {
+                duplicate = true;
+                break;
+              }
+          if (duplicate) {
+            skipped++;
+            continue;
+          }
+          stagedHashes.add(digest);
         }
-        stagedHashes.add(digest);
+        if (keys.has(key)) throw new Error("Duplicate upload target: " + key);
+        keys.add(key);
+        jobs.push({
+          id: uuid(),
+          profileId: id,
+          key,
+          direction: "upload",
+          state: "queued",
+          source: { ...source },
+          uploadTuning: tuning,
+          replace,
+          total: source.size,
+          done: 0,
+          created: time,
+          updated: time,
+        });
       }
-      if (keys.has(key)) throw new Error("Duplicate upload target: " + key);
-      keys.add(key);
-      jobs.push({
-        id: uuid(),
-        profileId: id,
-        key,
-        direction: "upload",
-        state: "queued",
-        source: { ...source },
-        replace,
-        total: source.size,
-        done: 0,
-        created: time,
-        updated: time,
-      });
+      await this.driver.save("upload-tuning", tuning);
+      await this.queues.add(jobs, tuning);
+      queued = true;
+    } finally {
+      for (const id of converted) {
+        if (!queued || !jobs.some((job) => job.source?.id === id)) await this.releaseIdleSource(id);
+      }
     }
-    await this.queues.add(jobs, concurrency);
     this.staged = this.staged.filter((s) => !entries.some((e) => e.id === s.id));
     await this.driver.save("stages", this.staged);
     for (const { id } of entries) await this.releaseIdleSource(id);
     return skipped;
   }
-  async download(id: string, keys: Item[], directory: string, prefix: string, replace: boolean) {
+  async download(
+    id: string,
+    keys: Item[],
+    directory: string,
+    prefix: string,
+    replace: boolean,
+    options?: { completion: DownloadCompletion; parallel: number },
+  ) {
     const store = await this.bucket(id),
       unique = new Map<string, Item>();
+    directory ||= (await this.driver.defaultDestination?.()) ?? "";
     if (!directory) throw new Error("Select a download folder");
     for (const item of keys) {
       if (item.kind === "folder")
@@ -505,7 +604,14 @@ export class Engine implements Api {
         updated: time,
       });
     }
-    await this.queues.add(jobs);
+    const action = options?.completion;
+    if (action === "notify" || action === "reveal") {
+      const batch = { id: uuid(), count: jobs.length, action };
+      for (const job of jobs) job.downloadBatch = batch;
+    }
+    const parallel = options ? downloadConcurrency(options.parallel) : undefined;
+    if (parallel !== undefined) await this.driver.save("download-tuning", parallel);
+    await this.queues.add(jobs, undefined, parallel);
     if (ignored.length)
       throw new Error(
         ignored.length + " object keys cannot be saved as local paths. First: " + ignored[0],

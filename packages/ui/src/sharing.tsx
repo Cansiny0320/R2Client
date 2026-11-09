@@ -34,6 +34,7 @@ export function ShareDialog({
   t,
   close,
   notify,
+  initialLink = "",
 }: {
   platform: Platform;
   profile: Profile;
@@ -42,13 +43,14 @@ export function ShareDialog({
   t: Tr;
   close: () => void;
   notify: (s: string) => void;
+  initialLink?: string;
 }) {
   const [kind, setKind] = useState<"signed" | "public" | "password">(
     profile.publicBase ? "public" : "signed",
   );
   const [seconds, setSeconds] = useState(3600),
     [format, setFormat] = useState(prefs.shareFormat),
-    [link, setLink] = useState(""),
+    [link, setLink] = useState(initialLink),
     [qr, setQr] = useState("");
   const [password, setPassword] = useState(""),
     [token, setToken] = useState(""),

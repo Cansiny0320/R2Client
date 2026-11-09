@@ -7,8 +7,8 @@ on:
 permissions:
   contents: read
 jobs:
-  web:
-    name: Web, S3 and share service
+  checks:
+    name: Renderer, S3 and share service
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -20,14 +20,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm test
-      - run: pnpm --filter @r2client/web build
+      - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:browser
-      - uses: actions/upload-artifact@v4
-        with:
-          name: r2client-web
-          path: apps/web/dist/client
-          if-no-files-found: error
+      - run: pnpm test:renderer
   desktop:
     name: Desktop (${{ matrix.name }})
     strategy:

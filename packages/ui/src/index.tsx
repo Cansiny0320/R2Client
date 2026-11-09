@@ -30,6 +30,7 @@ import type { Platform, Preferences } from "./common";
 import { Files } from "./files";
 import { Uploads, TransfersPanel } from "./transfers";
 import { ConnectionModal, Extensions, SettingsPanel, Statistics } from "./panels";
+import { BucketSetup, Welcome } from "./setup";
 export type { Platform } from "./common";
 
 type Tab = "files" | "upload" | "transfers" | "statistics" | "extensions";
@@ -106,7 +107,10 @@ export function Workspace({ platform: p }: { platform: Platform }) {
   const { prefs, change } = usePreferences();
   const t = translator(prefs.language),
     names = tabStrings(t);
-  const profile = data.profiles.find((x) => x.id === bucket) ?? data.profiles[0];
+  const profile =
+    data.profiles.find((x) => x.id === bucket) ??
+    data.profiles.find((x) => data.connected.includes(x.id)) ??
+    data.profiles[0];
   const pull = useCallback(async () => {
     const snap = await p.api.snapshot();
     setData((old) => (JSON.stringify(old) === JSON.stringify(snap) ? old : snap));
@@ -189,6 +193,40 @@ export function Workspace({ platform: p }: { platform: Platform }) {
         );
   const used = index?.objects.reduce((n, x) => n + x.size, 0);
   const current = !!profile && data.connected.includes(profile.id);
+  if (connection === null || (ready && !profile)) {
+    return (
+      <main className="workspace setup" data-theme={prefs.theme} style={{ zoom: prefs.zoom / 100 }}>
+        {connection === null ? (
+          <BucketSetup
+            p={p}
+            t={t}
+            accounts={data.accounts ?? data.profiles.filter((entry) => data.connected.includes(entry.id))}
+            linkedAccounts={data.profiles.map((entry) => entry.savedAccountId ?? entry.id)}
+            forgetAccount={async (id) => {
+              await p.api.forgetAccount(id);
+              await pull();
+            }}
+            close={async () => {
+              setConnection(undefined);
+              await pull().catch(() => {});
+            }}
+            saved={async () => {
+              const next = await p.api.snapshot();
+              setData(next);
+              const id = next.profiles.at(-1)?.id;
+              if (id) {
+                select(id);
+                const scanned = await p.api.scan(id);
+                setIndex(scanned);
+              }
+            }}
+          />
+        ) : (
+          <Welcome t={t} start={() => setConnection(null)} />
+        )}
+      </main>
+    );
+  }
   return (
     <div
       className="workspace"
@@ -255,77 +293,93 @@ export function Workspace({ platform: p }: { platform: Platform }) {
         </div>
         <div className="bucket-list">
           {list.map((row) => (
-            <button
-              key={row.id}
-              aria-label={
-                row.label +
-                " " +
-                (row.demo
-                  ? t("Demo", "示例", "デモ", "데모")
-                  : row.publicBase
-                    ? t("Public", "公开")
-                    : t("Private", "私有"))
-              }
-              draggable={sort === "manual"}
-              onDragStart={(e) => e.dataTransfer.setData("application/x-r2client-bucket", row.id)}
-              onDragOver={(e) => {
-                if (e.dataTransfer.types.includes("application/x-r2client-bucket"))
+            <div key={row.id} className="bucket-entry">
+              <button
+                aria-label={
+                  row.label +
+                  " " +
+                  (row.demo
+                    ? t("Demo", "示例", "デモ", "데모")
+                    : row.publicBase
+                      ? t("Public", "公开")
+                      : t("Private", "私有"))
+                }
+                draggable={sort === "manual"}
+                onDragStart={(e) => e.dataTransfer.setData("application/x-r2client-bucket", row.id)}
+                onDragOver={(e) => {
+                  if (e.dataTransfer.types.includes("application/x-r2client-bucket"))
+                    e.preventDefault();
+                }}
+                onDrop={(e) => {
+                  const dragged = e.dataTransfer.getData("application/x-r2client-bucket");
+                  if (!dragged || dragged === row.id) return;
                   e.preventDefault();
-              }}
-              onDrop={(e) => {
-                const dragged = e.dataTransfer.getData("application/x-r2client-bucket");
-                if (!dragged || dragged === row.id) return;
-                e.preventDefault();
-                const ids = data.profiles.map((p) => p.id),
-                  before = ids.indexOf(dragged),
-                  after = ids.indexOf(row.id);
-                if (before < 0 || after < 0) return;
-                ids.splice(before, 1);
-                ids.splice(after, 0, dragged);
-                void run(async () => {
-                  await p.api.reorder(ids);
-                  await pull();
-                });
-              }}
-              className={"bucket " + (row.id === profile?.id ? "active" : "")}
-              onClick={() => select(row.id)}
-            >
-              <span className="bucket-line">
-                <span className="bucket-icon">
-                  <Database size={17} />
+                  const ids = data.profiles.map((p) => p.id),
+                    before = ids.indexOf(dragged),
+                    after = ids.indexOf(row.id);
+                  if (before < 0 || after < 0) return;
+                  ids.splice(before, 1);
+                  ids.splice(after, 0, dragged);
+                  void run(async () => {
+                    await p.api.reorder(ids);
+                    await pull();
+                  });
+                }}
+                className={"bucket " + (row.id === profile?.id ? "active" : "")}
+                onClick={() => select(row.id)}
+              >
+                <span className="bucket-line">
+                  <span className="bucket-icon">
+                    <Database size={17} />
+                  </span>
+                  <span className="bucket-name">
+                    <strong title={row.label}>{row.label}</strong>
+                    <small>
+                      {row.demo
+                        ? t("Demo", "示例", "デモ", "데모")
+                        : row.publicBase
+                          ? t("Public", "公开", "公開", "공개")
+                          : t("Private", "私有", "非公開", "비공개")}
+                    </small>
+                  </span>
+                  {!row.demo && (
+                    <span
+                      className={
+                        "status-dot " + (data.connected.includes(row.id) ? "" : "status-off")
+                      }
+                      title={data.connected.includes(row.id) ? "Connected" : "Disconnected"}
+                    />
+                  )}
                 </span>
-                <span className="bucket-name">
-                  <strong title={row.label}>{row.label}</strong>
-                  <small>
-                    {row.demo
-                      ? t("Demo", "示例", "デモ", "데모")
-                      : row.publicBase
-                        ? t("Public", "公开", "公開", "공개")
-                        : t("Private", "私有", "非公開", "비공개")}
-                  </small>
-                </span>
-                {!row.demo && (
-                  <span
-                    className={
-                      "status-dot " + (data.connected.includes(row.id) ? "" : "status-off")
-                    }
-                    title={data.connected.includes(row.id) ? "Connected" : "Disconnected"}
-                  />
+                {row.id === profile?.id && (
+                  <span className="bucket-info">
+                    <span className="row between">
+                      <span>{t("Storage info", "存储信息")}</span>
+                      <b>{used === undefined ? "—" : byteLabel(used)}</b>
+                    </span>
+                    <span className="row between">
+                      <span>{t("Last updated", "最后更新")}</span>
+                      <b>{dateLabel(index?.updated ?? "")}</b>
+                    </span>
+                  </span>
                 )}
-              </span>
-              {row.id === profile?.id && (
-                <span className="bucket-info">
-                  <span className="row between">
-                    <span>{t("Storage info", "存储信息")}</span>
-                    <b>{used === undefined ? "—" : byteLabel(used)}</b>
-                  </span>
-                  <span className="row between">
-                    <span>{t("Last updated", "最后更新")}</span>
-                    <b>{dateLabel(index?.updated ?? "")}</b>
-                  </span>
-                </span>
-              )}
-            </button>
+              </button>
+              <IconButton
+                label={
+                  t("Bucket settings", "存储桶设置", "バケット設定", "버킷 설정") +
+                  " · " +
+                  row.label
+                }
+                className="bucket-settings"
+                onClick={() => {
+                  setSidebar(false);
+                  if (row.demo) setSettings(true);
+                  else setConnection(row);
+                }}
+              >
+                <Settings size={14} />
+              </IconButton>
+            </div>
           ))}
         </div>
         {list.length > 1 && (
