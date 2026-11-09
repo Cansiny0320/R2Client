@@ -215,6 +215,7 @@ export interface Driver {
   fileMatches?(destination: string, item: Item): Promise<boolean>;
   safeToReplace?(destination: string): Promise<boolean>;
   pickDestination?(): Promise<string | undefined>;
+  destinationPath?(id: string): string | undefined;
   pickSaveDestination?(name: string): Promise<{ directory: string; name: string } | undefined>;
   defaultDestination?(): Promise<string>;
   downloadCompleted?(destination: string, count: number, action: DownloadCompletion): Promise<void>;
@@ -268,6 +269,7 @@ export interface Api {
     options?: { completion: DownloadCompletion; parallel: number },
   ): Promise<void>;
   pickDestination(): Promise<string | undefined>;
+  destinationPath(id: string): Promise<string | undefined>;
   downloadAs(
     id: string,
     item: Item,
@@ -311,6 +313,7 @@ export const METHODS: ReadonlySet<keyof Api> = new Set([
   "upload",
   "download",
   "pickDestination",
+  "destinationPath",
   "downloadAs",
   "attach",
   "job",

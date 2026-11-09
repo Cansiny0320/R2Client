@@ -1,3 +1,4 @@
+import { FileAudio, FileImage, FileVideo } from "lucide-react";
 import type { Preset } from "@r2client/core";
 import type { Tr } from "./common";
 
@@ -182,30 +183,71 @@ export function MediaRules({
   value,
   set,
   t,
+  section,
+  hasMatchingFiles = true,
 }: {
   value: MediaDefaults;
   set: (value: MediaDefaults) => void;
   t: Tr;
+  section?: MediaCategory | "other";
+  hasMatchingFiles?: boolean;
 }) {
   return (
     <>
-      {mediaCategories.map((category) => {
-        const rule = value[category];
-        const change = (patch: Partial<Rule>) =>
-          set({ ...value, [category]: { ...rule, ...patch } });
-        return (
-          <fieldset className="stack media-settings-group" key={category}>
-            <legend>{mediaLabel(t, category)}</legend>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={rule.enabled}
-                onChange={(e) => change({ enabled: e.target.checked })}
-              />
-              {t("Convert on upload", "上传时自动转码")}
-            </label>
-            {rule.enabled && (
-              <>
+      {mediaCategories
+        .filter((category) => !section || section === category)
+        .map((category) => {
+          const rule = value[category];
+          const Icon =
+            category === "image" ? FileImage : category === "video" ? FileVideo : FileAudio;
+          const label = category === "image" ? t("Image", "图片") : mediaLabel(t, category);
+          const change = (patch: Partial<Rule>) =>
+            set({ ...value, [category]: { ...rule, ...patch } });
+          return (
+            <fieldset className="stack media-settings-group" key={category}>
+              <legend className="sr-only">{label}</legend>
+              <label className="check media-rules-toggle">
+                <span>
+                  {section ? (
+                    category === "image" ? (
+                      t("Enable image processing", "启用图片处理")
+                    ) : category === "audio" ? (
+                      t("Enable audio processing", "启用音频处理")
+                    ) : (
+                      t("Enable video processing", "启用视频处理")
+                    )
+                  ) : (
+                    <>
+                      <Icon size={16} aria-hidden="true" /> {label}
+                    </>
+                  )}
+                </span>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  aria-label={label + " · " + t("Convert on upload", "上传时自动转码")}
+                  checked={rule.enabled}
+                  onChange={(e) => change({ enabled: e.target.checked })}
+                />
+              </label>
+              {section === "image" && (
+                <p className="upload-processing-description">
+                  {t(
+                    "Convert to more web-friendly formats and control quality",
+                    "转换为更适合网页的格式，并调整输出质量",
+                  )}
+                </p>
+              )}
+              {section && !hasMatchingFiles && (
+                <p className="processing-no-files">
+                  {category === "image"
+                    ? t("No images in current batch", "当前批次没有图片")
+                    : category === "audio"
+                      ? t("No audio files in current batch", "当前批次没有音频")
+                      : t("No video files in current batch", "当前批次没有视频")}
+                </p>
+              )}
+              <fieldset className="stack media-rules-fields" disabled={!rule.enabled}>
                 <MediaFields
                   category={category}
                   value={rule.preset}
@@ -226,23 +268,24 @@ export function MediaRules({
                     />
                   </label>
                 )}
-              </>
-            )}
-          </fieldset>
-        );
-      })}
-      <label>
-        {t("Conversion timeout (minutes)", "转码超时（分钟）")}
-        <input
-          type="number"
-          min="1"
-          max="60"
-          value={value.timeoutMinutes}
-          onChange={(e) =>
-            set({ ...value, timeoutMinutes: Math.max(1, Math.min(60, +e.target.value || 1)) })
-          }
-        />
-      </label>
+              </fieldset>
+            </fieldset>
+          );
+        })}
+      {(!section || section === "other") && (
+        <label>
+          {t("Conversion timeout (minutes)", "转码超时（分钟）")}
+          <input
+            type="number"
+            min="1"
+            max="60"
+            value={value.timeoutMinutes}
+            onChange={(e) =>
+              set({ ...value, timeoutMinutes: Math.max(1, Math.min(60, +e.target.value || 1)) })
+            }
+          />
+        </label>
+      )}
     </>
   );
 }

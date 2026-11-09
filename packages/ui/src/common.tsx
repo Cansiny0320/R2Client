@@ -73,9 +73,9 @@ export const translator =
           : en) ?? en;
 export const tabStrings = (t: Tr) => ({
   files: t("Files", "文件列表", "ファイル", "파일"),
-  upload: t("Upload files", "上传文件", "アップロード", "업로드"),
+  upload: t("Upload", "上传文件", "アップロード", "업로드"),
   transfers: t("Transfers", "传输管理", "転送", "전송"),
-  statistics: t("Storage statistics", "存储统计", "ストレージ統計", "저장소 통계"),
+  statistics: t("Statistics", "存储统计", "ストレージ統計", "저장소 통계"),
   extensions: t("Extensions", "扩展功能", "拡張機能", "확장 기능"),
 });
 export function IconButton({
@@ -105,6 +105,7 @@ export function Modal({
   backLabel,
   pageHeading,
   pageActions,
+  className = "",
 }: {
   title: string;
   open: boolean;
@@ -114,6 +115,7 @@ export function Modal({
   backLabel?: string;
   pageHeading?: ReactNode;
   pageActions?: ReactNode;
+  className?: string;
 }) {
   const backButton = useRef<HTMLButtonElement>(null);
   return (
@@ -126,7 +128,9 @@ export function Modal({
       <Dialog.Portal>
         <Dialog.Backdrop className="dialog-backdrop" />
         <Dialog.Popup
-          className={"dialog " + (backLabel ? "dialog-page" : wide ? "dialog-wide" : "")}
+          className={
+            "dialog " + (backLabel ? "dialog-page" : wide ? "dialog-wide" : "") + " " + className
+          }
           initialFocus={backLabel ? backButton : undefined}
         >
           {backLabel ? (
@@ -158,11 +162,22 @@ export function Modal({
     </Dialog.Root>
   );
 }
-export function Empty({ label, action }: { label: string; action?: ReactNode }) {
+export function Empty({
+  label,
+  action,
+  icon = <Cloud size={37} strokeWidth={1.35} />,
+  description,
+}: {
+  label: string;
+  action?: ReactNode;
+  icon?: ReactNode;
+  description?: string;
+}) {
   return (
     <div className="empty">
-      <Cloud size={37} strokeWidth={1.35} />
+      {icon}
       <p>{label}</p>
+      {description && <span>{description}</span>}
       {action}
     </div>
   );
@@ -199,10 +214,12 @@ export function FileIcon({ item, size = 22 }: { item: Pick<Item, "kind" | "key">
     text: FileText,
     file: File,
   };
-  const C = item.kind === "folder" ? Folder : map[objectCategory(item.key)];
+  const category = item.kind === "folder" ? "folder" : objectCategory(item.key);
+  const C = category === "folder" ? Folder : map[category];
   return (
     <C
       size={size}
+      data-category={category}
       className={"file-icon " + (item.kind === "folder" ? "folder-icon" : "")}
       strokeWidth={1.6}
     />

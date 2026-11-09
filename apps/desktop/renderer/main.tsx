@@ -1,6 +1,8 @@
 import { createRoot } from "react-dom/client";
 import { Workspace, type Platform } from "@r2client/ui";
+import { version } from "../package.json";
 import "./style.css";
+import "./settings-parity.css";
 
 declare global {
   interface Window {
@@ -11,7 +13,7 @@ declare global {
 const platform = window.r2client;
 createRoot(document.getElementById("root")!).render(
   platform ? (
-    <Workspace platform={platform} />
+    <Workspace platform={platform} appVersion={version} />
   ) : (
     <main className="initial" role="alert">
       {navigator.language.startsWith("zh")

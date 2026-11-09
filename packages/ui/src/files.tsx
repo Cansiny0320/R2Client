@@ -1,3 +1,4 @@
+import { Menu } from "@base-ui/react/menu";
 import {
   ArrowDownToLine,
   ArrowUpToLine,
@@ -14,16 +15,22 @@ import {
   Layers,
   Link2,
   List,
-  Minus,
+  Pause,
   Pencil,
-  Plus,
+  Play,
   QrCode,
   RefreshCw,
   Search,
   Settings2,
   Trash2,
+  Volume2,
+  VolumeX,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
+import { createPortal } from "react-dom";
+import type { ReactNode } from "react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { byteLabel, formatLink, joined, nameOf, objectCategory, renamePlan } from "@r2client/core";
 import type { Detail, Index, Item, Mutation, Outcome, Profile, RenameRule } from "@r2client/core";
@@ -33,6 +40,11 @@ import { copyText, ShareDialog } from "./sharing";
 
 type Fn = <T>(operation: () => Promise<T>, success?: string) => Promise<T | undefined>;
 const emptyDirectory: Item[] = [];
+const previewTime = new Intl.DateTimeFormat("sv-SE", {
+  dateStyle: "short",
+  timeStyle: "medium",
+  hourCycle: "h23",
+});
 type Sort = `${"name" | "modified" | "size"}-${"asc" | "desc"}`;
 const danger = (kind: string) => kind === "delete" || kind === "move" || kind === "rename";
 type Action = "copy" | "move" | "delete" | "rename" | "metadata" | "folder";
@@ -140,15 +152,22 @@ function Thumb({
         />
       ) : (
         <div className="thumb-placeholder">
-          <FileIcon item={item} size={41} />
+          <FileIcon item={item} size={48} />
           {item.kind === "folder" && (
             <small>{t("Open folder", "打开文件夹", "フォルダを開く", "폴더 열기")}</small>
           )}
         </div>
       )}
+      {item.kind === "object" && (
+        <span className="thumbnail-size">{byteLabel(item.size).replace(" ", "")}</span>
+      )}
     </div>
   );
 }
+function previewIdentity(item: Item) {
+  return JSON.stringify([item.key, item.etag, item.modified, item.size]);
+}
+
 function Preview({
   p,
   profile,
@@ -178,8 +197,22 @@ function Preview({
   onDelete: () => void;
   onNavigate?: (step: -1 | 1) => void;
 }) {
+  const [recentImages, setRecentImages] = useState<Item[]>([]);
+  const activeId = previewIdentity(item);
+  const modifiedTime = Date.parse(item.modified);
+  function rememberImage() {
+    setRecentImages((images) =>
+      [item, ...images.filter((image) => image.key !== item.key)].slice(0, 3),
+    );
+  }
+  const navigate =
+    onNavigate &&
+    ((step: -1 | 1) => {
+      if (recentImages.some((image) => previewIdentity(image) === activeId)) rememberImage();
+      onNavigate(step);
+    });
   useLayoutEffect(() => {
-    if (!onNavigate) return;
+    if (!navigate) return;
     const keydown = (e: KeyboardEvent) => {
       if (
         e.altKey ||
@@ -191,63 +224,103 @@ function Preview({
         return;
       if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
         e.preventDefault();
-        onNavigate(e.key === "ArrowLeft" ? -1 : 1);
+        navigate(e.key === "ArrowLeft" ? -1 : 1);
       }
     };
     window.addEventListener("keydown", keydown, true);
     return () => window.removeEventListener("keydown", keydown, true);
-  }, [onNavigate]);
+  }, [navigate]);
   const toolbar = [
     [ArrowDownToLine, t("Download", "下载"), onDownload],
-    [FolderOpen, t("Save as…", "另存为…"), onDownloadTo],
     [Link2, t("Copy link", "复制链接"), onCopy],
-    [QrCode, t("Share and QR code", "分享与二维码"), onShare],
-    [ArrowUpRight, t("View in browser", "在浏览器中查看"), onView],
+    [QrCode, t("QR Code", "二维码"), onShare],
     [Pencil, labels(t).rename, onRename],
     [Trash2, labels(t).delete, onDelete],
   ] as const;
   return (
     <Modal
       title={nameOf(item.key)}
+      className="file-preview-dialog"
       open
       onClose={close}
       backLabel={t("Back", "返回")}
       pageHeading={
-        <span>
-          {byteLabel(item.size)} · {dateLabel(item.modified)}
-        </span>
+        <div className="preview-metadata">
+          <span>{byteLabel(item.size).replace(" ", "")}</span>
+          <span>
+            {Number.isFinite(modifiedTime)
+              ? previewTime.format(modifiedTime).replaceAll("-", "/")
+              : "—"}
+          </span>
+        </div>
       }
       pageActions={
         <div className="preview-actions">
-          {toolbar.map(
-            ([Icon, label, action]) =>
-              action && (
-                <IconButton key={label} label={label} onClick={action}>
-                  <Icon size={17} />
-                </IconButton>
-              ),
+          {onDownloadTo && (
+            <IconButton label={t("Save as…", "另存为…")} onClick={onDownloadTo}>
+              <FolderOpen size={16} />
+            </IconButton>
           )}
+          <IconButton label={t("View in browser", "在浏览器中查看")} onClick={onView}>
+            <ArrowUpRight size={16} />
+          </IconButton>
+          {toolbar.map(([Icon, label, action]) => (
+            <button
+              key={label}
+              className={
+                "button preview-action" +
+                (action === onDelete ? " preview-delete" : "") +
+                (action === onRename ? " preview-rename" : "")
+              }
+              aria-label={action === onShare ? t("Share and QR code", "分享与二维码") : label}
+              title={label}
+              onClick={action}
+            >
+              <Icon size={16} />
+              <span>{label}</span>
+            </button>
+          ))}
+          <IconButton className="preview-close" label={t("Close", "关闭")} onClick={close}>
+            <X size={16} />
+          </IconButton>
         </div>
       }
     >
       <div className="preview-gallery">
-        {onNavigate && (
+        {navigate && (
           <IconButton
             className="preview-previous"
             label={t("Previous file", "上一个文件")}
-            onClick={() => onNavigate(-1)}
+            onClick={() => navigate(-1)}
           >
-            <ChevronLeft size={26} />
+            <ChevronLeft size={16} />
           </IconButton>
         )}
-        <PreviewContent key={item.key} p={p} profile={profile} item={item} t={t} />
-        {onNavigate && (
+        {/* Keep loaded image elements mounted so revisiting them needs no new request. */}
+        {[item, ...recentImages.filter((image) => previewIdentity(image) !== activeId)].map(
+          (entry) => {
+            const id = previewIdentity(entry);
+            const visible = id === activeId;
+            return (
+              <PreviewContent
+                key={id}
+                p={p}
+                profile={profile}
+                item={entry}
+                t={t}
+                visible={visible}
+                onImageLoad={visible ? rememberImage : undefined}
+              />
+            );
+          },
+        )}
+        {navigate && (
           <IconButton
             className="preview-next"
             label={t("Next file", "下一个文件")}
-            onClick={() => onNavigate(1)}
+            onClick={() => navigate(1)}
           >
-            <ChevronRight size={26} />
+            <ChevronRight size={16} />
           </IconButton>
         )}
       </div>
@@ -260,11 +333,15 @@ function PreviewContent({
   profile,
   item,
   t,
+  visible,
+  onImageLoad,
 }: {
   p: Platform;
   profile: Profile;
   item: Item;
   t: Tr;
+  visible: boolean;
+  onImageLoad?: () => void;
 }) {
   const [detail, setDetail] = useState<Detail>(),
     [url, setUrl] = useState(""),
@@ -272,14 +349,50 @@ function PreviewContent({
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true),
     [zoom, setZoom] = useState(100);
+  const [imageSize, setImageSize] = useState<{ width: number; height: number }>();
+  const [viewport, setViewport] = useState<{ width: number; height: number }>();
+  const scroll = useRef<HTMLDivElement>(null);
+  const info = useRef<HTMLDetailsElement>(null);
   const category = objectCategory(item.key);
+  const fittedWidth =
+    imageSize && viewport
+      ? Math.min(
+          imageSize.width,
+          viewport.width,
+          (viewport.height * imageSize.width) / imageSize.height,
+        )
+      : undefined;
+  useLayoutEffect(() => {
+    const container = scroll.current;
+    if (!visible || !container || !url) return;
+    const measure = () => {
+      const { clientWidth: width, clientHeight: height } = container;
+      if (width && height) setViewport({ width, height });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [url, visible]);
+  useLayoutEffect(() => {
+    if (!visible) return;
+    setZoom(100);
+    scroll.current?.scrollTo(0, 0);
+    if (info.current) info.current.open = false;
+  }, [visible]);
   useEffect(() => {
     let active = true;
     let localUrl = "";
+    const reportError = (e: unknown) => {
+      if (active) setError(e instanceof Error ? e.message : String(e));
+    };
     void (async () => {
-      const d = await p.api.detail(profile.id, item.key);
+      const metadata = p.api.detail(profile.id, item.key).then((d) => {
+        if (active) setDetail(d);
+      });
+      if (category === "image") void metadata.catch(reportError);
+      else await metadata;
       if (!active) return;
-      setDetail(d);
       if (category === "text" || category === "pdf") {
         const bytes = await p.api.previewDocument(profile.id, item.key, category);
         if (!active) return;
@@ -295,9 +408,7 @@ function PreviewContent({
         if (active) setUrl(u);
       }
     })()
-      .catch((e) => {
-        if (active) setError(e instanceof Error ? e.message : String(e));
-      })
+      .catch(reportError)
       .finally(() => {
         if (active) setLoading(false);
       });
@@ -307,7 +418,7 @@ function PreviewContent({
     };
   }, [p, profile.id, item.key, category]);
   return (
-    <div className="preview-content">
+    <div className="preview-content" data-category={category} hidden={!visible}>
       <div className="media-preview">
         {url && category === "image" ? (
           <div className="image-preview">
@@ -317,7 +428,7 @@ function PreviewContent({
                 disabled={zoom === 25}
                 onClick={() => setZoom(zoom - 25)}
               >
-                <Minus size={16} />
+                <ZoomOut size={16} />
               </IconButton>
               <button
                 className="button"
@@ -331,14 +442,19 @@ function PreviewContent({
                 disabled={zoom === 300}
                 onClick={() => setZoom(zoom + 25)}
               >
-                <Plus size={16} />
+                <ZoomIn size={16} />
               </IconButton>
             </div>
-            <div className="image-preview-scroll">
+            <div ref={scroll} className="image-preview-scroll">
               <img
                 src={url}
                 alt={nameOf(item.key)}
-                style={{ width: zoom + "%", height: zoom + "%" }}
+                style={fittedWidth ? { width: (fittedWidth * zoom) / 100 } : undefined}
+                onLoad={(event) => {
+                  const { naturalWidth: width, naturalHeight: height } = event.currentTarget;
+                  if (width && height) setImageSize({ width, height });
+                  onImageLoad?.();
+                }}
                 onError={() => setError(t("Could not load this image", "无法加载此图片"))}
               />
             </div>
@@ -346,13 +462,16 @@ function PreviewContent({
         ) : url && category === "video" ? (
           <video src={url} controls preload="metadata" />
         ) : url && category === "audio" ? (
-          <audio src={url} controls preload="metadata" />
+          <AudioPreview url={url} item={item} type={detail?.type || item.type} t={t} />
         ) : url && category === "pdf" ? (
           <iframe src={url} title={nameOf(item.key)} />
         ) : category === "text" && !loading && !error ? (
           <pre>{text}</pre>
         ) : loading ? (
-          <span role="status">{t("Loading preview…", "正在加载预览…")}</span>
+          <span className="preview-loading" role="status">
+            <span className="preview-spinner spin" aria-hidden="true" />
+            {t("Loading preview...", "正在加载预览…")}
+          </span>
         ) : (
           <FileIcon item={item} size={45} />
         )}
@@ -362,7 +481,7 @@ function PreviewContent({
           {error}
         </div>
       )}
-      <details className="preview-details">
+      <details ref={info} className="preview-details">
         <summary>{t("File information", "文件信息")}</summary>
         <dl className="detail-grid">
           <dt>{t("Object key", "对象路径")}</dt>
@@ -387,6 +506,130 @@ function PreviewContent({
       </details>
     </div>
   );
+}
+
+function audioTime(seconds: number) {
+  const elapsed = Math.floor(seconds);
+  return `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
+}
+
+function AudioPreview({ url, item, type, t }: { url: string; item: Item; type?: string; t: Tr }) {
+  const player = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [time, setTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(0.8);
+  const [muted, setMuted] = useState(false);
+  const [error, setError] = useState(false);
+  const gain = muted ? 0 : volume;
+  const failed = t("Could not play this audio", "无法播放此音频");
+  return (
+    <div className="audio-preview">
+      <audio
+        ref={player}
+        src={url}
+        preload="metadata"
+        onLoadedMetadata={(event) => {
+          event.currentTarget.volume = volume;
+        }}
+        onDurationChange={(event) => {
+          const audio = event.currentTarget;
+          setDuration(Number.isFinite(audio.duration) ? audio.duration : 0);
+        }}
+        onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onError={() => setError(true)}
+      />
+      <div className="audio-preview-heading">
+        <button
+          className="audio-play"
+          aria-label={playing ? t("Pause", "暂停") : t("Play", "播放")}
+          disabled={error}
+          onClick={() => {
+            const audio = player.current!;
+            if (audio.paused) {
+              void audio.play().catch((reason: DOMException) => {
+                if (reason.name !== "AbortError") setError(true);
+              });
+            }
+            else audio.pause();
+          }}
+        >
+          {playing ? <Pause size={28} /> : <Play size={28} />}
+        </button>
+        <div className="audio-file-name">
+          <strong title={nameOf(item.key)}>{nameOf(item.key)}</strong>
+          <small>{byteLabel(item.size)}</small>
+        </div>
+        <span className="audio-type">{t("Audio", "音频")}</span>
+      </div>
+      <div className="audio-timeline">
+        <input
+          type="range"
+          aria-label={t("Playback position", "播放进度")}
+          aria-valuetext={audioTime(time)}
+          min={0}
+          max={duration}
+          step={0.01}
+          value={Math.min(time, duration)}
+          disabled={!duration || error}
+          style={{ background: audioRangeFill(duration ? time / duration : 0) }}
+          onChange={(event) => {
+            const seconds = Number(event.currentTarget.value);
+            player.current!.currentTime = seconds;
+            setTime(seconds);
+          }}
+        />
+        <div className="audio-clock">
+          <span>{audioTime(time)}</span>
+          <span>{audioTime(duration)}</span>
+        </div>
+      </div>
+      <div className="audio-footer">
+        <div className="audio-volume">
+          <button
+            aria-label={gain ? t("Mute", "静音") : t("Unmute", "取消静音")}
+            onClick={() => {
+              const audio = player.current!;
+              if (!gain && !volume) {
+                audio.volume = 0.8;
+                setVolume(0.8);
+              }
+              audio.muted = Boolean(gain);
+              setMuted(audio.muted);
+            }}
+          >
+            {gain ? <Volume2 size={16} /> : <VolumeX size={16} />}
+          </button>
+          <input
+            type="range"
+            aria-label={t("Volume", "音量")}
+            min={0}
+            max={1}
+            step={0.01}
+            value={gain}
+            style={{ background: audioRangeFill(gain) }}
+            onChange={(event) => {
+              const audio = player.current!;
+              audio.volume = Number(event.currentTarget.value);
+              audio.muted = false;
+              setVolume(audio.volume);
+              setMuted(false);
+            }}
+          />
+        </div>
+        {type && <span className="audio-mime">{type}</span>}
+      </div>
+      {error && <div role="alert">{failed}</div>}
+    </div>
+  );
+}
+
+function audioRangeFill(fraction: number) {
+  const percent = Math.min(100, fraction * 100);
+  return `linear-gradient(to right, var(--preview-green) ${percent}%, var(--soft) ${percent}%)`;
 }
 function ActionModal({
   action,
@@ -602,8 +845,40 @@ function ActionModal({
     </Modal>
   );
 }
+function FileActionMenu({
+  point,
+  children,
+}: {
+  point?: { x: number; y: number };
+  children: ReactNode;
+}) {
+  const panel = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!point || !panel.current) return;
+    const element = panel.current;
+    const place = () => {
+      const { width, height } = element.getBoundingClientRect();
+      element.style.left = Math.max(8, Math.min(point.x, window.innerWidth - width - 8)) + "px";
+      element.style.top = Math.max(8, Math.min(point.y, window.innerHeight - height - 8)) + "px";
+    };
+    place();
+    element.querySelector("button")?.focus({ preventScroll: true });
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [point]);
+  if (!point) return <div className="item-menu">{children}</div>;
+  return createPortal(
+    <div className="item-menu file-context-menu" ref={panel}>
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
 export function Files({
   platform: p,
+  active,
+  revision,
   profile,
   prefix,
   go,
@@ -619,6 +894,8 @@ export function Files({
   setIndex,
 }: {
   platform: Platform;
+  active: boolean;
+  revision: string;
   profile: Profile;
   prefix: string;
   go: (s: string) => void;
@@ -649,13 +926,25 @@ export function Files({
     [preview, setPreview] = useState<Item>(),
     [share, setShare] = useState<{ item: Item; previewLink?: string }>(),
     [action, setAction] = useState<Action>();
+  const [contextPoint, setContextPoint] = useState<{ x: number; y: number }>();
   const [menu, setMenu] = useState<string>(),
     [syncing, setSyncing] = useState(false),
     [syncError, setSyncError] = useState("");
   useEffect(() => {
+    if (active) return;
+    setMenu(undefined);
+    setSearchOpen(false);
+    setPreview(undefined);
+    setShare(undefined);
+    setAction(undefined);
+  }, [active]);
+  useEffect(() => {
     if (!menu) return;
     const outside = (event: PointerEvent) => {
-      if (event.target instanceof Element && !event.target.closest(".file-actions"))
+      if (
+        event.target instanceof Element &&
+        !event.target.closest(".file-actions, .file-context-menu")
+      )
         setMenu(undefined);
     };
     const escape = (event: KeyboardEvent) => {
@@ -710,12 +999,12 @@ export function Files({
     return () => {
       valid = false;
     };
-  }, [p, profile.id, prefix, flat, connected, version]);
+  }, [p, profile.id, prefix, flat, connected, version, revision]);
   useEffect(() => {
-    if (!connected || !prefs.autoRefresh) return;
+    if (!active || !connected || !prefs.autoRefresh) return;
     const timer = setInterval(() => refresh((x) => x + 1), prefs.autoRefresh * 60_000);
     return () => clearInterval(timer);
-  }, [connected, prefs.autoRefresh]);
+  }, [active, connected, prefs.autoRefresh]);
   const source =
     !flat && query && index
       ? index.objects
@@ -846,6 +1135,7 @@ export function Files({
   return (
     <section
       className="files-section"
+      hidden={!active}
       onKeyDown={(e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === "a" && !(e.target instanceof HTMLInputElement)) {
           e.preventDefault();
@@ -860,7 +1150,7 @@ export function Files({
             aria-current={!prefix ? "location" : undefined}
             onClick={() => go("")}
           >
-            {t("All files", "所有文件", "すべてのファイル", "모든 파일")}
+            {t("All Files", "所有文件", "すべてのファイル", "모든 파일")}
           </button>
           {crumbs.map((name, i) => (
             <span key={i}>
@@ -875,17 +1165,7 @@ export function Files({
             </span>
           ))}
         </nav>
-        <div className="toolbar-actions">
-          <button
-            className={"button " + (searchActive ? "selected" : "")}
-            aria-haspopup="dialog"
-            onClick={() => {
-              setDraft({ query, category });
-              setSearchOpen(true);
-            }}
-          >
-            <Search size={15} /> {t("Search", "搜索", "検索", "검색")}
-          </button>
+        <div className="toolbar-actions file-view-tools">
           <select
             aria-label={t("Sort files", "文件排序")}
             title={t("Sort files", "文件排序")}
@@ -925,6 +1205,25 @@ export function Files({
           >
             <Layers size={15} /> {t("Flat view", "平铺", "フラット表示", "펼쳐 보기")}
           </button>
+          <IconButton
+            label={labels(t).folder}
+            disabled={!connected}
+            onClick={() => setAction("folder")}
+          >
+            <FolderPlus size={17} />
+          </IconButton>
+        </div>
+        <div className="toolbar-actions">
+          <button
+            className={"button " + (searchActive ? "selected" : "")}
+            aria-haspopup="dialog"
+            onClick={() => {
+              setDraft({ query, category });
+              setSearchOpen(true);
+            }}
+          >
+            <Search size={15} /> {t("Search", "搜索", "検索", "검색")}
+          </button>
           <button className="button primary" onClick={upload} disabled={!connected}>
             <ArrowUpToLine size={15} /> {t("Upload", "上传", "アップロード", "업로드")}
           </button>
@@ -960,24 +1259,56 @@ export function Files({
             <RefreshCw size={15} className={loading ? "spin" : ""} />
             <span className="toolbar-label">{t("Refresh", "刷新")}</span>
           </button>
+          {chosen.length > 0 && (
+            <Menu.Root modal={false}>
+              <Menu.Trigger
+                className="button batch-trigger"
+                aria-label={t("Batch actions", "批量操作")}
+              >
+                <Ellipsis size={16} />
+                <span className="toolbar-label">{t("Batch actions", "批量操作")}</span>
+                <span className="batch-count">{chosen.length}</span>
+              </Menu.Trigger>
+              <Menu.Portal>
+                <Menu.Positioner sideOffset={4} align="end" className="batch-positioner">
+                  <Menu.Popup className="batch-menu">
+                    <Menu.Item onClick={() => void download(chosen)}>
+                      <ArrowDownToLine size={15} /> {t("Download", "下载")}
+                    </Menu.Item>
+                    {(["copy", "move", "rename", "metadata", "delete"] as const)
+                      .filter((a) => a !== "metadata" || chosen.every((x) => x.kind === "object"))
+                      .map((a) => {
+                        const Icon = buttons[a];
+                        return (
+                          <Menu.Item key={a} onClick={() => setAction(a)}>
+                            <Icon size={15} /> {labels(t)[a]}
+                          </Menu.Item>
+                        );
+                      })}
+                    <Menu.Item onClick={() => setSelected(new Map())}>
+                      <X size={15} /> {t("Clear selection", "清除选择")}
+                    </Menu.Item>
+                  </Menu.Popup>
+                </Menu.Positioner>
+              </Menu.Portal>
+            </Menu.Root>
+          )}
           <button
             type="button"
-            className={"button " + (all ? "selected" : "")}
-            aria-label={t("Select all", "全选", "全選択", "전체 선택")}
+            className="button"
+            aria-label={
+              all ? t("Unselect all", "取消全选") : t("Select all", "全选", "全選択", "전체 선택")
+            }
             aria-pressed={all}
             disabled={!shown.length}
             onClick={selectAll}
           >
-            <Check size={15} />
-            <span className="toolbar-label">{t("Select all", "全选", "全選択", "전체 선택")}</span>
+            <Check size={15} className="selection-toolbar-icon" />
+            <span className="toolbar-label">
+              {all ? t("Unselect all", "取消全选") : t("Select all", "全选", "全選択", "전체 선택")}
+            </span>
+            {all && <span className="batch-count">{chosen.length}</span>}
           </button>
-          <IconButton
-            label={labels(t).folder}
-            disabled={!connected}
-            onClick={() => setAction("folder")}
-          >
-            <FolderPlus size={17} />
-          </IconButton>
         </div>
       </div>
       {query && (
@@ -993,8 +1324,13 @@ export function Files({
           </IconButton>
         </div>
       )}
-      {searchOpen && (
-        <Modal open title={t("Search files", "搜索文件")} onClose={() => setSearchOpen(false)}>
+      {active && searchOpen && (
+        <Modal
+          open
+          className="file-search-dialog"
+          title={t("Search Files", "搜索文件")}
+          onClose={() => setSearchOpen(false)}
+        >
           <form
             className="dialog-body stack"
             onSubmit={async (event) => {
@@ -1004,26 +1340,34 @@ export function Files({
               applySearch(draft);
             }}
           >
-            <input
-              autoFocus
-              aria-label={t("Search objects", "搜索对象")}
-              placeholder={t("Enter a filename to search…", "输入文件名进行搜索…")}
-              value={draft.query}
-              onChange={(event) => setDraft({ ...draft, query: event.target.value })}
-            />
-            <select
-              aria-label={t("Filter files", "筛选文件")}
-              value={draft.category}
-              onChange={(e) => setDraft({ ...draft, category: e.target.value })}
-            >
-              <option value="">{t("All types", "所有类型")}</option>
-              {["image", "video", "audio", "pdf", "text", "file"].map((x) => (
-                <option key={x} value={x}>
-                  {x}
-                </option>
-              ))}
-            </select>
-            <div className="row end gap">
+            <label className="file-search-field">
+              <Search size={16} aria-hidden="true" />
+              <input
+                autoFocus
+                aria-label={t("Search objects", "搜索对象")}
+                placeholder={t("Enter file name to search…", "输入文件名进行搜索…")}
+                value={draft.query}
+                onChange={(event) => setDraft({ ...draft, query: event.target.value })}
+              />
+            </label>
+            <div className="row gap file-search-actions">
+              <details className="file-search-filter" open={draft.category ? true : undefined}>
+                <summary aria-label={t("File type filter", "按文件类型筛选")}>
+                  <Settings2 size={16} aria-hidden="true" />
+                </summary>
+                <select
+                  aria-label={t("Filter files", "筛选文件")}
+                  value={draft.category}
+                  onChange={(e) => setDraft({ ...draft, category: e.target.value })}
+                >
+                  <option value="">{t("All types", "所有类型")}</option>
+                  {["image", "video", "audio", "pdf", "text", "file"].map((x) => (
+                    <option key={x} value={x}>
+                      {x}
+                    </option>
+                  ))}
+                </select>
+              </details>
               {searchActive && (
                 <button
                   type="button"
@@ -1033,42 +1377,27 @@ export function Files({
                   {t("Clear search", "清除搜索")}
                 </button>
               )}
-              <button type="submit" className="button primary" disabled={syncing}>
-                <Search size={15} /> {t("Search", "搜索")}
+              <button type="button" className="button" onClick={() => setSearchOpen(false)}>
+                {t("Cancel", "取消")}
+              </button>
+              <button
+                type="submit"
+                className="button primary"
+                disabled={syncing || (!draft.query.trim() && !draft.category && !searchActive)}
+              >
+                <Search size={16} /> {t("Search", "搜索")}
               </button>
             </div>
           </form>
         </Modal>
       )}
-      {chosen.length > 0 && (
-        <div className="file-subbar">
-          <div className="batch-bar">
-            <b>
-              {chosen.length} {t("selected", "项已选")}
-            </b>
-            <IconButton label={t("Download", "下载")} onClick={() => void download(chosen)}>
-              <ArrowDownToLine size={15} />
-            </IconButton>
-            {(["copy", "move", "rename", "metadata", "delete"] as const)
-              .filter((a) => a !== "metadata" || chosen.every((x) => x.kind === "object"))
-              .map((a) => {
-                const Icon = buttons[a];
-                return (
-                  <IconButton key={a} label={labels(t)[a]} onClick={() => setAction(a)}>
-                    <Icon size={15} />
-                  </IconButton>
-                );
-              })}
-            <IconButton
-              label={t("Clear selection", "清除选择")}
-              onClick={() => setSelected(new Map())}
-            >
-              <X size={15} />
-            </IconButton>
-          </div>
-        </div>
-      )}
-      <div className="file-scroll" ref={fileScroll}>
+      <div
+        className="file-scroll"
+        ref={fileScroll}
+        onScroll={() => {
+          if (menu && contextPoint) setMenu(undefined);
+        }}
+      >
         {!connected ? (
           <Empty
             label={t("Connect this bucket to view its files", "连接存储桶后即可浏览文件")}
@@ -1094,7 +1423,7 @@ export function Files({
             {prefs.view === "list" && (
               <div className="list-head">
                 <span />
-                {t("File name", "文件名")}
+                {t("File Name", "文件名")}
                 <span>{t("Size", "大小")}</span>
                 <span className="list-action-heading">{t("Actions", "操作")}</span>
               </div>
@@ -1109,7 +1438,8 @@ export function Files({
                   key={item.key}
                   onContextMenu={(e) => {
                     e.preventDefault();
-                    setMenu(menu === item.key ? undefined : item.key);
+                    setContextPoint({ x: e.clientX, y: e.clientY });
+                    setMenu(item.key);
                   }}
                 >
                   <input
@@ -1132,7 +1462,6 @@ export function Files({
                       }
                     >
                       <Thumb
-                        key={String(prefs.preview) + (item.etag ?? item.modified)}
                         p={p}
                         profile={profile}
                         item={item}
@@ -1146,7 +1475,11 @@ export function Files({
                     onClick={(e) => (e.ctrlKey || e.metaKey ? choose(item) : open())}
                     title={item.key}
                   >
-                    {prefs.view === "list" && <FileIcon item={item} size={18} />}
+                    {prefs.view === "list" && (
+                      <span className="list-file-icon">
+                        <FileIcon item={item} size={16} />
+                      </span>
+                    )}
                     <span>
                       <span>{isIndexedSearch && item.kind === "object" ? item.key : label}</span>
                       {prefs.view === "list" && item.modified && (
@@ -1157,7 +1490,6 @@ export function Files({
                   {prefs.view === "grid" ? (
                     <div className="file-data">
                       <span>{dateLabel(item.modified)}</span>
-                      <span>{item.kind === "object" ? byteLabel(item.size) : ""}</span>
                     </div>
                   ) : (
                     <span className="muted">
@@ -1188,7 +1520,7 @@ export function Files({
                           <Pencil size={15} />
                         </IconButton>
                         <IconButton
-                          className="wide-card-action"
+                          className="wide-card-action file-delete-action"
                           label={labels(t).delete + " " + label}
                           onClick={() => singleAction(item, "delete")}
                         >
@@ -1198,13 +1530,17 @@ export function Files({
                     )}
                     <IconButton
                       label={t("More actions", "更多操作") + " " + label}
+                      className="file-more-action"
                       aria-expanded={menu === item.key}
-                      onClick={() => setMenu(menu === item.key ? undefined : item.key)}
+                      onClick={() => {
+                        setContextPoint(undefined);
+                        setMenu(menu === item.key && !contextPoint ? undefined : item.key);
+                      }}
                     >
                       <Ellipsis size={17} />
                     </IconButton>
                     {menu === item.key && (
-                      <div className="item-menu">
+                      <FileActionMenu point={contextPoint}>
                         {item.kind === "object" && (
                           <button
                             className="compact-card-action"
@@ -1266,7 +1602,7 @@ export function Files({
                               </button>
                             );
                           })}
-                      </div>
+                      </FileActionMenu>
                     )}
                   </div>
                 </article>
@@ -1287,48 +1623,48 @@ export function Files({
       )}
       <footer className="status-bar">
         <div className="row gap">
-          <span className={"status-dot " + (error ? "status-error" : "")} />
-          <span>
-            {index
-              ? t("Last synced", "上次同步") + ": " + dateLabel(index.updated)
-              : t("Ready", "就绪")}
+          <span className="file-sync-label">
+            <strong>{t("Last sync:", "上次同步：")}</strong>{" "}
+            {index ? dateLabel(index.updated) : t("Not synced yet", "尚未同步")}
           </span>
           <button
-            className="button ghost"
+            className="button sync-files-button"
             disabled={!connected || syncing}
             onClick={() => void sync()}
           >
-            <RefreshCw size={13} className={syncing ? "spin" : ""} />{" "}
-            {t("Sync bucket", "同步存储桶")}
+            <RefreshCw size={16} className={syncing ? "spin" : ""} />{" "}
+            {t("Sync Bucket", "同步存储桶")}
           </button>
         </div>
-        <div className="row gap">
-          <button
-            className="button pager-button"
-            type="button"
-            aria-label={t("Previous page", "上一页")}
-            disabled={currentPage === 0}
-            onClick={() => setLocal(currentPage - 1)}
-          >
-            <ChevronLeft size={14} />
-            <span className="pager-label">{t("Previous page", "上一页")}</span>
-          </button>
-          <span>
-            {t("Page", "页")} {currentPage + 1} / {localMax} · {sorted.length} {t("items", "项")}
-          </span>
-          <button
-            className="button pager-button"
-            type="button"
-            aria-label={t("Next page", "下一页")}
-            disabled={currentPage + 1 >= localMax}
-            onClick={() => setLocal(currentPage + 1)}
-          >
-            <span className="pager-label">{t("Next page", "下一页")}</span>
-            <ChevronRight size={14} />
-          </button>
-        </div>
+        {localMax > 1 && (
+          <div className="row gap">
+            <button
+              className="button pager-button"
+              type="button"
+              aria-label={t("Previous page", "上一页")}
+              disabled={currentPage === 0}
+              onClick={() => setLocal(currentPage - 1)}
+            >
+              <ChevronLeft size={14} />
+              <span className="pager-label">{t("Previous page", "上一页")}</span>
+            </button>
+            <span>
+              {t("Page", "页")} {currentPage + 1} / {localMax} · {sorted.length} {t("items", "项")}
+            </span>
+            <button
+              className="button pager-button"
+              type="button"
+              aria-label={t("Next page", "下一页")}
+              disabled={currentPage + 1 >= localMax}
+              onClick={() => setLocal(currentPage + 1)}
+            >
+              <span className="pager-label">{t("Next page", "下一页")}</span>
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        )}
       </footer>
-      {preview && (
+      {active && preview && (
         <Preview
           p={p}
           profile={profile}
@@ -1358,7 +1694,7 @@ export function Files({
           }
         />
       )}
-      {share && (
+      {active && share && (
         <ShareDialog
           platform={p}
           profile={profile}
@@ -1373,7 +1709,7 @@ export function Files({
           notify={notify}
         />
       )}
-      {action && (
+      {active && action && (
         <ActionModal
           action={action}
           items={chosen}

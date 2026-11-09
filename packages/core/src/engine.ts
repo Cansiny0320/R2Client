@@ -625,6 +625,9 @@ export class Engine implements Api {
   async pickDestination() {
     return this.driver.pickDestination?.();
   }
+  async destinationPath(id: string) {
+    return this.driver.destinationPath?.(id);
+  }
   async downloadAs(
     id: string,
     item: Item,

@@ -1,0 +1,414 @@
+.dialog-page:has(.settings-layout) > .dialog-page-title {
+  min-height: 80px;
+}
+
+.settings-layout {
+  grid-template-columns: 256px minmax(0, 1fr);
+  font-size: 14px;
+}
+
+.settings-layout nav {
+  gap: 8px;
+}
+
+.settings-layout nav button {
+  gap: 12px;
+  min-height: 40px;
+  padding: 8px 12px;
+  color: color-mix(in srgb, var(--text) 80%, var(--muted));
+  font-weight: 500;
+}
+
+.settings-layout nav button > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.settings-layout nav button.current {
+  background: light-dark(#d1fae5, var(--accent-soft));
+  color: light-dark(#047857, var(--accent));
+}
+
+.settings-layout nav button.current > svg {
+  color: var(--accent);
+}
+
+.settings-layout nav button.current::before {
+  width: 4px;
+  border-radius: 0 4px 4px 0;
+}
+
+.settings-content {
+  padding: 40px 48px;
+}
+
+.settings-content > .settings-section-heading {
+  align-items: flex-start;
+  margin-bottom: 0;
+}
+
+.settings-content > .settings-section-heading:not(:first-child) {
+  margin-top: 24px;
+}
+
+.settings-section-heading > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-section-heading h2 {
+  font-size: 20px;
+  line-height: 28px;
+}
+
+.settings-section-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+.settings-section-heading .settings-heading-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+}
+
+.settings-section-heading :is(.settings-heading-icon, .button) svg {
+  padding: 0;
+  background: transparent;
+}
+.settings-section-heading .button {
+  font-size: 14px;
+  font-weight: 500;
+  padding-inline: 10px;
+}
+
+.settings-layout :is(.button, .icon-button) {
+  box-shadow: 0 1px 2px #0001;
+}
+
+.settings-group {
+  border-radius: 16px;
+  padding: 20px;
+  gap: 16px;
+}
+
+.settings-content .settings-group.form-columns {
+  gap: 20px;
+}
+
+.settings-content .settings-group label:not(.check) {
+  max-width: none;
+}
+
+.settings-content .settings-group label {
+  white-space: normal;
+}
+
+.settings-content .settings-group :is(input:not([type="checkbox"], [type="range"]), select) {
+  min-height: 36px;
+  font-size: 14px;
+}
+
+.settings-content .settings-group label > select {
+  align-self: flex-start;
+  max-width: 100%;
+  min-width: 100px;
+}
+
+.settings-wide-field {
+  grid-column: 1 / -1;
+}
+
+.settings-inline-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 650;
+}
+
+.settings-bucket {
+  gap: 16px;
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.settings-bucket-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.settings-current-language {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-current-language > span {
+  font-size: 20px;
+}
+
+.settings-languages {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.settings-choice-grid.settings-languages > label {
+  gap: 8px;
+  min-height: 80px;
+  padding: 12px;
+  border-color: color-mix(in srgb, var(--border) 50%, var(--bg));
+  border-radius: 12px;
+}
+
+.settings-choice-grid.settings-languages > label:has(:checked) {
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.settings-languages strong {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.025em;
+}
+
+.settings-languages .language-symbol {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 32px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  font-size: 46px;
+  line-height: 1;
+}
+
+.settings-formats {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+}
+
+.settings-choice-grid.settings-formats > label {
+  display: flex;
+  flex-direction: column;
+  justify-content: start;
+  gap: 12px;
+  max-width: none;
+  padding: 16px;
+  border-radius: 16px;
+  color: var(--text);
+}
+
+.settings-choice-grid.settings-formats > label:has(:checked) {
+  background: var(--bg);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.settings-format-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.settings-format-heading > input[type="radio"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  flex: none;
+  padding: 0;
+  margin: 4px 0 0;
+  border-radius: 50%;
+}
+
+.settings-format-heading > input[type="radio"]:checked {
+  background: radial-gradient(circle, var(--accent) 0 3.5px, var(--bg) 4px);
+}
+
+.settings-format-description {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.settings-format-preview {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 78%, var(--side));
+}
+
+.settings-format-preview > span {
+  padding: 10px 12px;
+  border-inline-end: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.settings-format-preview > code {
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.settings-media .media-settings-group {
+  border: 0;
+  border-radius: 0;
+  padding: 8px 0 0;
+}
+
+.settings-media .media-settings-group + .media-settings-group {
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+
+.settings-media .media-settings-group > legend {
+  padding: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.settings-destination {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  gap: 8px;
+}
+
+.settings-destination > .icon-button {
+  width: 36px;
+  height: 36px;
+}
+
+.settings-path-value {
+  overflow-wrap: anywhere;
+  font-family: "Geist Mono", ui-monospace, monospace;
+}
+
+.settings-download-note {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-download-note > span {
+  min-width: 0;
+}
+
+.settings-download-note svg {
+  flex: none;
+}
+
+.settings-about-name {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.settings-about-name > code {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 1px 8px;
+  font-weight: 650;
+}
+
+.settings-group > .settings-about-link {
+  align-self: stretch;
+  min-height: 40px;
+}
+
+@media (max-width: 1023px) {
+  .settings-content {
+    padding: 32px;
+  }
+
+  .settings-languages {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 639px) {
+  .settings-languages {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .dialog-page:has(.settings-layout) > .dialog-page-title {
+    min-height: 57px;
+  }
+
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-layout nav {
+    gap: 5px;
+  }
+
+  .settings-layout nav button {
+    gap: 7px;
+    min-height: 32px;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  .settings-content {
+    padding: 16px;
+  }
+
+  .settings-section-heading .settings-heading-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .settings-section-heading h2 {
+    font-size: 17px;
+    line-height: 23px;
+  }
+
+  .settings-section-heading p {
+    font-size: 12px;
+    line-height: 17px;
+  }
+
+  .settings-group {
+    padding: 14px;
+  }
+
+  .settings-format-preview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-format-preview > span {
+    border-inline-end: 0;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+  }
+
+  .settings-format-preview > code {
+    padding-top: 6px;
+  }
+}
+
+.settings-group .ffmpeg-enabled {
+  background: #10b981;
+  color: #ecfdf5;
+  border-radius: 6px;
+}

@@ -2,29 +2,24 @@ import {
   ArrowUpToLine,
   BarChart3,
   Blocks,
+  CircleAlert,
   Cloud,
   Database,
-  Files as FileIcon,
+  Files as FilesIcon,
+  HardDrive,
   ListChecks,
+  LoaderCircle,
+  LockKeyhole,
   Menu,
   Plus,
   Settings,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { create } from "zustand";
-import { byteLabel, errorText } from "@r2client/core";
+import { byteLabel, errorText, nameOf } from "@r2client/core";
 import type { Index, Profile, Snapshot } from "@r2client/core";
-import {
-  dateLabel,
-  defaults,
-  droppedFiles,
-  Empty,
-  IconButton,
-  Modal,
-  tabStrings,
-  translator,
-} from "./common";
+import { defaults, droppedFiles, Empty, IconButton, Modal, tabStrings, translator } from "./common";
 import type { Platform, Preferences } from "./common";
 import { Files } from "./files";
 import { Uploads, TransfersPanel } from "./transfers";
@@ -32,14 +27,15 @@ import { ConnectionModal, Extensions, SettingsPanel, Statistics } from "./panels
 import { BucketSetup, Welcome } from "./setup";
 export type { Platform } from "./common";
 
-type Tab = "files" | "upload" | "transfers" | "statistics" | "extensions";
-const tabs: { id: Tab; icon: typeof FileIcon }[] = [
-  { id: "files", icon: FileIcon },
-  { id: "upload", icon: ArrowUpToLine },
-  { id: "transfers", icon: ListChecks },
-  { id: "statistics", icon: BarChart3 },
-  { id: "extensions", icon: Blocks },
-];
+const tabs = ["files", "upload", "transfers", "statistics", "extensions"] as const;
+type Tab = (typeof tabs)[number];
+const tabIcons = {
+  files: FilesIcon,
+  upload: ArrowUpToLine,
+  transfers: ListChecks,
+  statistics: BarChart3,
+  extensions: Blocks,
+};
 const storage = "r2client-preferences";
 const usePreferences = create<{
   prefs: Preferences;
@@ -53,7 +49,7 @@ const usePreferences = create<{
       return { prefs };
     }),
 }));
-export function Workspace({ platform: p }: { platform: Platform }) {
+export function Workspace({ platform: p, appVersion }: { platform: Platform; appVersion: string }) {
   const [data, setData] = useState<Snapshot>({
     profiles: [],
     connected: [],
@@ -65,11 +61,17 @@ export function Workspace({ platform: p }: { platform: Platform }) {
     [tab, setTab] = useState<Tab>("files"),
     [prefix, setPrefix] = useState(""),
     [indexes, setIndexes] = useState<Record<string, Index>>({});
+  const [fileRevision, refreshFiles] = useState(0);
   const [settings, setSettings] = useState(false),
     [connection, setConnection] = useState<Profile | null>(),
     [remove, setRemove] = useState<Profile>(),
     [sidebar, setSidebar] = useState(false);
-  const [toast, setToast] = useState<{ message: string; error: boolean; id: number }>(),
+  const [toast, setToast] = useState<{
+      message: string;
+      error: boolean;
+      id: number;
+      download: boolean;
+    }>(),
     [ready, setReady] = useState(false),
     [startup, setStartup] = useState(""),
     [dragging, setDragging] = useState(false);
@@ -83,6 +85,20 @@ export function Workspace({ platform: p }: { platform: Platform }) {
     data.profiles.find((x) => data.connected.includes(x.id)) ??
     data.profiles[0];
   const index = profile && indexes[profile.id];
+  const uploadRevision = useMemo(
+    () =>
+      data.jobs
+        .filter(
+          (job) =>
+            job.profileId === profile?.id &&
+            job.direction === "upload" &&
+            job.state === "completed" &&
+            job.key.startsWith(prefix),
+        )
+        .map((job) => `${job.id}:${job.updated}`)
+        .join(","),
+    [data.jobs, profile?.id, prefix],
+  );
   const updateIndex = useCallback((id: string, value: Index) => {
     setIndexes((old) =>
       old[id] && old[id].updated >= value.updated ? old : { ...old, [id]: value },
@@ -123,7 +139,8 @@ export function Workspace({ platform: p }: { platform: Platform }) {
     setStartup("");
   }, [p]);
   const notify = useCallback(
-    (message: string, error = false) => setToast({ message, error, id: Date.now() }),
+    (message: string, error = false, download = false) =>
+      setToast({ message, error, download, id: Date.now() }),
     [],
   );
   const run = useCallback(
@@ -198,6 +215,20 @@ export function Workspace({ platform: p }: { platform: Platform }) {
         );
   const used = index?.objects.reduce((n, x) => n + x.size, 0);
   const current = !!profile && data.connected.includes(profile.id);
+  const activeDownloads =
+    tab !== "transfers" && !settings && (!toast || (toast.download && !toast.error))
+      ? data.jobs.filter(
+          (job) =>
+            job.profileId === profile?.id &&
+            job.direction === "download" &&
+            job.state === "running",
+        )
+      : [];
+  const savingDownloads = activeDownloads.every((job) => job.total > 0 && job.done >= job.total);
+  const downloadName =
+    activeDownloads.length === 1
+      ? nameOf(activeDownloads[0]!.key)
+      : t(activeDownloads.length + " files", activeDownloads.length + " 个文件");
   if (connection === null || (ready && !profile)) {
     return (
       <main className="workspace setup" data-theme={prefs.theme} style={{ zoom: prefs.zoom / 100 }}>
@@ -290,7 +321,7 @@ export function Workspace({ platform: p }: { platform: Platform }) {
           </IconButton>
         </div>
         <div className="bucket-heading">
-          <strong>{t("Storage buckets", "存储桶列表", "バケット", "버킷 목록")}</strong>
+          <strong>{t("Bucket List", "存储桶列表", "バケット", "버킷 목록")}</strong>
           <IconButton
             label={t("Add storage bucket", "添加存储桶", "バケットを追加", "버킷 추가")}
             onClick={() => setConnection(null)}
@@ -342,6 +373,7 @@ export function Workspace({ platform: p }: { platform: Platform }) {
                   <span className="bucket-name">
                     <strong title={row.label}>{row.label}</strong>
                     <small>
+                      {!row.demo && !row.publicBase && <LockKeyhole size={12} aria-hidden="true" />}
                       {row.demo
                         ? t("Demo", "示例", "デモ", "데모")
                         : row.publicBase
@@ -361,12 +393,19 @@ export function Workspace({ platform: p }: { platform: Platform }) {
                 {row.id === profile?.id && (
                   <span className="bucket-info">
                     <span className="row between">
-                      <span>{t("Storage info", "存储信息")}</span>
-                      <b>{used === undefined ? "—" : byteLabel(used)}</b>
+                      <span>{t("Storage Info", "存储信息")}</span>
+                      <b>
+                        {used !== undefined && <HardDrive size={13} aria-hidden="true" />}
+                        {used === undefined
+                          ? "—"
+                          : used < 1024
+                            ? used.toFixed(2) + " B"
+                            : byteLabel(used)}
+                      </b>
                     </span>
                     <span className="row between">
-                      <span>{t("Last updated", "最后更新")}</span>
-                      <b>{dateLabel(index?.updated ?? "")}</b>
+                      <span>{t("Last Updated", "最后更新")}</span>
+                      <b>{index?.updated ? new Date(index.updated).toLocaleString() : "—"}</b>
                     </span>
                   </span>
                 )}
@@ -418,28 +457,43 @@ export function Workspace({ platform: p }: { platform: Platform }) {
             <Menu size={20} />
           </IconButton>
           <nav className="top-tabs" aria-label={t("Workspace", "工作区")}>
-            {tabs.map(({ id, icon: Icon }) => (
-              <button
-                type="button"
-                key={id}
-                className={tab === id ? "current" : ""}
-                aria-current={tab === id ? "page" : undefined}
-                onClick={() => setTab(id)}
-              >
-                <Icon size={16} />
-                {names[id]}
-                {id === "transfers" && data.jobs.some((j) => j.state === "running") && (
-                  <span className="tab-dot" />
-                )}
-              </button>
-            ))}
+            <span
+              className="top-tab-selection"
+              aria-hidden="true"
+              style={{ transform: `translateX(${tabs.indexOf(tab) * 100}%)` }}
+            />
+            {tabs.map((id) => {
+              const Icon = tabIcons[id];
+              return (
+                <button
+                  type="button"
+                  key={id}
+                  className={tab === id ? "current" : ""}
+                  aria-label={names[id]}
+                  aria-current={tab === id ? "page" : undefined}
+                  title={names[id]}
+                  onClick={() => setTab(id)}
+                >
+                  <Icon size={20} aria-hidden="true" />
+                  <span>{names[id]}</span>
+                </button>
+              );
+            })}
           </nav>
         </header>
         {!ready ? (
           <Empty label={startup || t("Loading…", "正在加载…")} />
-        ) : tab === "files" && profile ? (
+        ) : profile ? (
           <Files
-            key={profile.id}
+            key={JSON.stringify([
+              profile.id,
+              profile.savedAccountId,
+              profile.accountId,
+              profile.jurisdiction,
+              profile.bucket,
+            ])}
+            active={tab === "files"}
+            revision={`${fileRevision}:${uploadRevision}`}
             platform={p}
             profile={profile}
             prefix={prefix}
@@ -449,7 +503,7 @@ export function Workspace({ platform: p }: { platform: Platform }) {
             setPrefs={change}
             t={t}
             run={run}
-            notify={notify}
+            notify={(message) => notify(message, false, true)}
             upload={() => setTab("upload")}
             connect={() => setConnection(profile)}
             index={index}
@@ -505,6 +559,7 @@ export function Workspace({ platform: p }: { platform: Platform }) {
             run={run}
             notify={notify}
             changed={pull}
+            onObjectsChanged={() => refreshFiles((n) => n + 1)}
           />
         )}
       </main>
@@ -514,20 +569,37 @@ export function Workspace({ platform: p }: { platform: Platform }) {
           {t("Drop to stage files", "松开以暂存文件")}
         </div>
       )}
-      {toast && (
-        <div
-          className={"toast " + (toast.error ? "toast-error" : "")}
-          role={toast.error ? "alert" : "status"}
-        >
-          <span>{toast.message}</span>
-          <IconButton label={t("Dismiss", "关闭")} onClick={() => setToast(undefined)}>
-            <X size={15} />
-          </IconButton>
+      {activeDownloads.length > 0 ? (
+        <div className="toast download-toast download-progress-toast" role="status">
+          <LoaderCircle size={16} className="spin" aria-hidden="true" />
+          <span>
+            {savingDownloads
+              ? t("Saving " + downloadName + "…", "正在保存 " + downloadName + "…")
+              : t("Downloading " + downloadName + "...", "正在下载 " + downloadName + "…")}
+          </span>
         </div>
+      ) : (
+        toast && (
+          <div
+            className={
+              "toast" +
+              (toast.error ? " toast-error" : "") +
+              (toast.download ? " download-toast" : "")
+            }
+            role={toast.error ? "alert" : "status"}
+          >
+            {toast.download && toast.error && <CircleAlert size={16} aria-hidden="true" />}
+            <span>{toast.message}</span>
+            <IconButton label={t("Dismiss", "关闭")} onClick={() => setToast(undefined)}>
+              <X size={15} />
+            </IconButton>
+          </div>
+        )
       )}
       {settings && (
         <SettingsPanel
           p={p}
+          appVersion={appVersion}
           prefs={prefs}
           set={change}
           t={t}

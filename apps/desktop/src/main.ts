@@ -86,11 +86,11 @@ async function start() {
     callback(false),
   );
   session.defaultSession.setPermissionCheckHandler(() => false);
-  const native = await desktopDriver(),
-    api = new Engine(native.driver);
   let win: BrowserWindow | undefined,
     tray: Tray | undefined,
     quitting = false;
+  const native = await desktopDriver(() => win),
+    api = new Engine(native.driver);
   function verify(event: IpcMainInvokeEvent) {
     if (
       !win ||

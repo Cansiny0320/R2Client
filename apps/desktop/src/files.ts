@@ -1,4 +1,5 @@
 import { app, clipboard, dialog, Notification, safeStorage, shell } from "electron";
+import type { BrowserWindow, OpenDialogOptions, SaveDialogOptions } from "electron";
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import {
@@ -71,7 +72,12 @@ function run(exe: string, args: string[], signal?: AbortSignal, timeout = 3600_0
   });
 }
 
-export async function desktopDriver() {
+export async function desktopDriver(getWindow?: () => BrowserWindow | undefined) {
+  const macWindow = () => (process.platform === "darwin" ? getWindow?.() : undefined);
+  function openDialog(options: OpenDialogOptions) {
+    const owner = macWindow();
+    return owner ? dialog.showOpenDialog(owner, options) : dialog.showOpenDialog(options);
+  }
   const user = app.getPath("userData"),
     state = path.join(user, "workspace"),
     temp = path.join(user, "staging");
@@ -294,7 +300,7 @@ export async function desktopDriver() {
       if (old?.temp && path.dirname(old.file) === temp) await rm(old.file, { force: true });
     },
     async pickSources(directory) {
-      const r = await dialog.showOpenDialog({
+      const r = await openDialog({
         properties: directory ? ["openDirectory"] : ["openFile", "multiSelections"],
       });
       return (
@@ -308,9 +314,13 @@ export async function desktopDriver() {
       ).flat();
     },
     async pickDestination() {
-      const r = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] });
+      const r = await openDialog({ properties: ["openDirectory", "createDirectory"] });
       if (r.canceled || !r.filePaths[0]) return undefined;
       return registerDirectory(r.filePaths[0]);
+    },
+    destinationPath(id) {
+      if (id === "") return app.getPath("downloads");
+      if (typeof id === "string" && idOk(id)) return dirs[id];
     },
     async pickSaveDestination(name) {
       let suggestedName = "download";
@@ -319,10 +329,14 @@ export async function desktopDriver() {
       } catch {
         // The original object key can contain characters unsupported in local file names.
       }
-      const result = await dialog.showSaveDialog({
+      const owner = macWindow();
+      const options: SaveDialogOptions = {
         defaultPath: path.join(app.getPath("downloads"), suggestedName),
         properties: ["createDirectory"],
-      });
+      };
+      const result = await (owner
+        ? dialog.showSaveDialog(owner, options)
+        : dialog.showSaveDialog(options));
       if (result.canceled || !result.filePath) return undefined;
       return {
         directory: await registerDirectory(path.dirname(result.filePath)),
