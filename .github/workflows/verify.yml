@@ -2,6 +2,7 @@ name: Verify and package
 on:
   push:
     branches: [main]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -56,3 +57,49 @@ jobs:
             apps/desktop/release/*.zip
             apps/desktop/release/*.exe
           if-no-files-found: error
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [checks, desktop]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: r2client-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify and publish installers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(jq -er '.version' apps/desktop/package.json)
+          if [[ "$GITHUB_REF_NAME" != "v$version" || "$(jq -er '.version' package.json)" != "$version" ]]; then
+            echo "Release tag and package versions must match" >&2
+            exit 1
+          fi
+
+          prefix="release-assets/R2Client-$version"
+          assets=(
+            "$prefix-mac-arm64.dmg"
+            "$prefix-mac-arm64.zip"
+            "$prefix-mac-x64.dmg"
+            "$prefix-mac-x64.zip"
+            "$prefix-win-x64.exe"
+            "$prefix-linux-x86_64.AppImage"
+            "$prefix-linux-amd64.deb"
+          )
+          for asset in "${assets[@]}"; do
+            if [[ ! -s "$asset" ]]; then
+              echo "Missing release asset: $asset" >&2
+              exit 1
+            fi
+          done
+
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "R2Client $GITHUB_REF_NAME" \
+            --notes-from-tag "${assets[@]}"
