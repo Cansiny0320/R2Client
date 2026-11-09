@@ -243,8 +243,8 @@ export class Engine implements Api {
     this.profiles = ids.map((id) => this.profile(id));
     await this.driver.save("profiles", this.profiles);
   }
-  async list(id: string, prefix: string, cursor?: string) {
-    return (await this.bucket(id)).list(prefix, cursor, false, undefined, 1000);
+  async list(id: string, prefix: string, cursor?: string, recursive = false) {
+    return (await this.bucket(id)).list(prefix, cursor, recursive, undefined, 1000);
   }
   async detail(id: string, key: string) {
     return (await this.bucket(id)).head(checkKey(key));

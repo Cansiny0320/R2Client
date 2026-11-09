@@ -11,6 +11,7 @@ import {
   FolderOpen,
   FolderPlus,
   Grid2X2,
+  Layers,
   Link2,
   List,
   Minus,
@@ -32,8 +33,7 @@ import { copyText, ShareDialog } from "./sharing";
 
 type Fn = <T>(operation: () => Promise<T>, success?: string) => Promise<T | undefined>;
 const emptyDirectory: Item[] = [];
-const dimensions = ["name", "newest", "oldest", "size"] as const;
-type Sort = (typeof dimensions)[number];
+type Sort = `${"name" | "modified" | "size"}-${"asc" | "desc"}`;
 const danger = (kind: string) => kind === "delete" || kind === "move" || kind === "rename";
 type Action = "copy" | "move" | "delete" | "rename" | "metadata" | "folder";
 const buttons = {
@@ -633,15 +633,17 @@ export function Files({
   index?: Index;
   setIndex: (v: Index) => void;
 }) {
-  const [directory, setDirectory] = useState<{ prefix: string; items: Item[] }>(),
-    [local, setLocal] = useState(0);
+  const [directory, setDirectory] = useState<{ prefix: string; flat: boolean; items: Item[] }>(),
+    [local, setLocal] = useState(0),
+    [flat, setFlat] = useState(false);
+  const fileScroll = useRef<HTMLDivElement>(null);
   const [version, refresh] = useState(0),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
   const [query, setQuery] = useState(""),
     [searchOpen, setSearchOpen] = useState(false),
-    [draft, setDraft] = useState({ query: "", category: "", sort: "newest" as Sort }),
-    [sort, setSort] = useState<Sort>("newest"),
+    [draft, setDraft] = useState({ query: "", category: "" }),
+    [sort, setSort] = useState<Sort>("modified-desc"),
     [category, setCategory] = useState("");
   const [selected, setSelected] = useState<Map<string, Item>>(new Map()),
     [preview, setPreview] = useState<Item>(),
@@ -683,16 +685,20 @@ export function Files({
       const cursors = new Set<string>();
       let cursor: string | undefined;
       do {
-        const page = await p.api.list(profile.id, prefix, cursor);
+        const page = await p.api.list(profile.id, prefix, cursor, flat);
         if (!valid) return;
-        for (const item of page.items) items.set(item.key, item);
+        for (const item of page.items) {
+          if (!flat || (item.kind === "object" && !item.key.endsWith("/"))) {
+            items.set(item.key, item);
+          }
+        }
         cursor = page.next;
         if (cursor) {
           if (cursors.has(cursor)) throw new Error("The R2 cursor stopped advancing");
           cursors.add(cursor);
         }
       } while (cursor);
-      setDirectory({ prefix, items: [...items.values()] });
+      setDirectory({ prefix, flat, items: [...items.values()] });
     }
     void loadDirectory()
       .catch((e) => {
@@ -704,19 +710,19 @@ export function Files({
     return () => {
       valid = false;
     };
-  }, [p, profile.id, prefix, connected, version]);
+  }, [p, profile.id, prefix, flat, connected, version]);
   useEffect(() => {
     if (!connected || !prefs.autoRefresh) return;
     const timer = setInterval(() => refresh((x) => x + 1), prefs.autoRefresh * 60_000);
     return () => clearInterval(timer);
   }, [connected, prefs.autoRefresh]);
   const source =
-    query && index
+    !flat && query && index
       ? index.objects
-      : directory?.prefix === prefix
+      : directory?.prefix === prefix && directory.flat === flat
         ? directory.items
         : emptyDirectory;
-  const isIndexedSearch = !!(query && index);
+  const isIndexedSearch = !!(!flat && query && index);
   const sorted = useMemo(() => {
     const q = query.trim().toLowerCase();
     const matches = new Map<string, Item>();
@@ -740,21 +746,29 @@ export function Files({
         }
       }
     }
+    const [field, direction] = sort.split("-");
     return [...matches.values()]
       .filter(
         (x) =>
-          (isIndexedSearch || !q || x.key.toLowerCase().includes(q)) &&
+          (isIndexedSearch ||
+            !q ||
+            x.key
+              .slice(flat ? prefix.length : 0)
+              .toLowerCase()
+              .includes(q)) &&
           (!category || x.kind === "folder" || objectCategory(x.key) === category),
       )
       .sort((a, b) => {
         if (!isIndexedSearch && a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
-        if (sort === "size") return b.size - a.size;
-        if (sort === "name") return a.key.localeCompare(b.key);
-        return sort === "newest"
-          ? b.modified.localeCompare(a.modified)
-          : a.modified.localeCompare(b.modified);
+        const order =
+          field === "size"
+            ? a.size - b.size
+            : field === "name"
+              ? nameOf(a.key).localeCompare(nameOf(b.key))
+              : a.modified.localeCompare(b.modified);
+        return (direction === "asc" ? order : -order) || a.key.localeCompare(b.key);
       });
-  }, [source, query, category, sort, isIndexedSearch]);
+  }, [source, query, category, sort, isIndexedSearch, flat, prefix]);
   const localMax = Math.max(1, Math.ceil(sorted.length / prefs.pageSize)),
     currentPage = Math.min(local, localMax - 1),
     shown = sorted.slice(currentPage * prefs.pageSize, (currentPage + 1) * prefs.pageSize);
@@ -821,11 +835,10 @@ export function Files({
     setAction(action);
   }
   const crumbs = prefix.split("/").filter(Boolean);
-  const searchActive = !!query || !!category || sort !== "newest";
+  const searchActive = !!query || !!category;
   function applySearch(value: typeof draft) {
     setQuery(value.query.trim());
     setCategory(value.category);
-    setSort(value.sort);
     setLocal(0);
     setSelected(new Map());
     setSearchOpen(false);
@@ -867,11 +880,50 @@ export function Files({
             className={"button " + (searchActive ? "selected" : "")}
             aria-haspopup="dialog"
             onClick={() => {
-              setDraft({ query, category, sort });
+              setDraft({ query, category });
               setSearchOpen(true);
             }}
           >
             <Search size={15} /> {t("Search", "搜索", "検索", "검색")}
+          </button>
+          <select
+            aria-label={t("Sort files", "文件排序")}
+            title={t("Sort files", "文件排序")}
+            value={sort}
+            onChange={(event) => {
+              setSort(event.target.value as Sort);
+              setLocal(0);
+              fileScroll.current?.scrollTo(0, 0);
+            }}
+          >
+            <option value="modified-desc">{t("Newest first", "最新优先")}</option>
+            <option value="modified-asc">{t("Oldest first", "最早优先")}</option>
+            <option value="name-asc">
+              {t("Name (A–Z)", "名称升序", "名前の昇順", "이름 오름차순")}
+            </option>
+            <option value="name-desc">
+              {t("Name (Z–A)", "名称降序", "名前の降順", "이름 내림차순")}
+            </option>
+            <option value="size-desc">{t("Largest first", "最大优先")}</option>
+            <option value="size-asc">
+              {t("Smallest first", "最小优先", "サイズの小さい順", "크기 오름차순")}
+            </option>
+          </select>
+          <button
+            type="button"
+            className={"button " + (flat ? "selected" : "")}
+            aria-pressed={flat}
+            disabled={!connected}
+            onClick={() => {
+              setFlat(!flat);
+              setQuery("");
+              setLocal(0);
+              setSelected(new Map());
+              setMenu(undefined);
+              fileScroll.current?.scrollTo(0, 0);
+            }}
+          >
+            <Layers size={15} /> {t("Flat view", "平铺", "フラット表示", "펼쳐 보기")}
           </button>
           <button className="button primary" onClick={upload} disabled={!connected}>
             <ArrowUpToLine size={15} /> {t("Upload", "上传", "アップロード", "업로드")}
@@ -935,7 +987,7 @@ export function Files({
           </span>
           <IconButton
             label={t("Clear search", "清除搜索")}
-            onClick={() => applySearch({ ...draft, query: "", category, sort })}
+            onClick={() => applySearch({ query: "", category })}
           >
             <X size={15} />
           </IconButton>
@@ -948,7 +1000,7 @@ export function Files({
             onSubmit={async (event) => {
               event.preventDefault();
               const term = draft.query.trim();
-              if (term && !index && connected) await sync();
+              if (term && !flat && !index && connected) await sync();
               applySearch(draft);
             }}
           >
@@ -959,36 +1011,24 @@ export function Files({
               value={draft.query}
               onChange={(event) => setDraft({ ...draft, query: event.target.value })}
             />
-            <div className="search-options">
-              <select
-                aria-label={t("Filter files", "筛选文件")}
-                value={draft.category}
-                onChange={(e) => setDraft({ ...draft, category: e.target.value })}
-              >
-                <option value="">{t("All types", "所有类型")}</option>
-                {["image", "video", "audio", "pdf", "text", "file"].map((x) => (
-                  <option key={x} value={x}>
-                    {x}
-                  </option>
-                ))}
-              </select>
-              <select
-                aria-label={t("Sort files", "文件排序")}
-                value={draft.sort}
-                onChange={(e) => setDraft({ ...draft, sort: e.target.value as Sort })}
-              >
-                <option value="newest">{t("Newest first", "最新优先")}</option>
-                <option value="oldest">{t("Oldest first", "最早优先")}</option>
-                <option value="name">{t("Name", "名称")}</option>
-                <option value="size">{t("Largest first", "最大优先")}</option>
-              </select>
-            </div>
+            <select
+              aria-label={t("Filter files", "筛选文件")}
+              value={draft.category}
+              onChange={(e) => setDraft({ ...draft, category: e.target.value })}
+            >
+              <option value="">{t("All types", "所有类型")}</option>
+              {["image", "video", "audio", "pdf", "text", "file"].map((x) => (
+                <option key={x} value={x}>
+                  {x}
+                </option>
+              ))}
+            </select>
             <div className="row end gap">
               {searchActive && (
                 <button
                   type="button"
                   className="button"
-                  onClick={() => applySearch({ query: "", category: "", sort: "newest" })}
+                  onClick={() => applySearch({ query: "", category: "" })}
                 >
                   {t("Clear search", "清除搜索")}
                 </button>
@@ -1028,7 +1068,7 @@ export function Files({
           </div>
         </div>
       )}
-      <div className="file-scroll">
+      <div className="file-scroll" ref={fileScroll}>
         {!connected ? (
           <Empty
             label={t("Connect this bucket to view its files", "连接存储桶后即可浏览文件")}
@@ -1060,6 +1100,7 @@ export function Files({
               </div>
             )}
             {shown.map((item) => {
+              const label = flat ? item.key.slice(prefix.length) : nameOf(item.key);
               const active = selected.has(item.key);
               const open = () => (item.kind === "folder" ? go(item.key) : setPreview(item));
               return (
@@ -1073,7 +1114,7 @@ export function Files({
                 >
                   <input
                     className="file-check"
-                    aria-label={t("Select", "选择") + " " + nameOf(item.key)}
+                    aria-label={t("Select", "选择") + " " + label}
                     type="checkbox"
                     checked={active}
                     onChange={() => choose(item)}
@@ -1087,7 +1128,7 @@ export function Files({
                           ? t("Open folder", "打开文件夹")
                           : t("Preview", "预览")) +
                         " " +
-                        nameOf(item.key)
+                        label
                       }
                     >
                       <Thumb
@@ -1107,9 +1148,7 @@ export function Files({
                   >
                     {prefs.view === "list" && <FileIcon item={item} size={18} />}
                     <span>
-                      <span>
-                        {isIndexedSearch && item.kind === "object" ? item.key : nameOf(item.key)}
-                      </span>
+                      <span>{isIndexedSearch && item.kind === "object" ? item.key : label}</span>
                       {prefs.view === "list" && item.modified && (
                         <small className="list-date">{dateLabel(item.modified)}</small>
                       )}
@@ -1129,28 +1168,28 @@ export function Files({
                     {item.kind === "object" && (
                       <>
                         <IconButton
-                          label={t("Download", "下载") + " " + nameOf(item.key)}
+                          label={t("Download", "下载") + " " + label}
                           onClick={() => void download([item])}
                         >
                           <ArrowDownToLine size={15} />
                         </IconButton>
                         <IconButton
                           className="wide-card-action"
-                          label={t("Copy link", "复制链接") + " " + nameOf(item.key)}
+                          label={t("Copy link", "复制链接") + " " + label}
                           onClick={() => void copyObjectLink(item)}
                         >
                           <Link2 size={15} />
                         </IconButton>
                         <IconButton
                           className="wide-card-action"
-                          label={labels(t).rename + " " + nameOf(item.key)}
+                          label={labels(t).rename + " " + label}
                           onClick={() => singleAction(item, "rename")}
                         >
                           <Pencil size={15} />
                         </IconButton>
                         <IconButton
                           className="wide-card-action"
-                          label={labels(t).delete + " " + nameOf(item.key)}
+                          label={labels(t).delete + " " + label}
                           onClick={() => singleAction(item, "delete")}
                         >
                           <Trash2 size={15} />
@@ -1158,7 +1197,7 @@ export function Files({
                       </>
                     )}
                     <IconButton
-                      label={t("More actions", "更多操作") + " " + nameOf(item.key)}
+                      label={t("More actions", "更多操作") + " " + label}
                       aria-expanded={menu === item.key}
                       onClick={() => setMenu(menu === item.key ? undefined : item.key)}
                     >

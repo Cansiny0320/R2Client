@@ -78,6 +78,24 @@ async function fixtureEngine(driver: Driver) {
   ]);
   return new Engine(driver);
 }
+test("bucket listing supports recursive pages within a prefix", async () => {
+  const store = new DemoStore();
+  await store.put("documents/nested/notes.txt", new Uint8Array(), "text/plain", false);
+  const api = await fixtureEngine(memoryDriver(store));
+  const direct = await api.list("demo", "documents/");
+  assert.ok(
+    direct.items.some((item) => item.kind === "folder" && item.key === "documents/nested/"),
+  );
+  const recursive = await api.list("demo", "documents/", undefined, true);
+  assert.deepEqual(
+    recursive.items.map(({ key, kind }) => [key, kind]),
+    [
+      ["documents/guide.txt", "object"],
+      ["documents/links.md", "object"],
+      ["documents/nested/notes.txt", "object"],
+    ],
+  );
+});
 test("startup ignores the old demo profile and keeps a saved bucket", async () => {
   const driver = memoryDriver(new DemoStore());
   assert.deepEqual((await new Engine(driver).snapshot()).profiles, []);

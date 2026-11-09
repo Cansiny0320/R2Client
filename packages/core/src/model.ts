@@ -234,7 +234,7 @@ export interface Api {
   removeProfile(id: string): Promise<void>;
   forgetAccount(id: string): Promise<void>;
   reorder(ids: string[]): Promise<void>;
-  list(id: string, prefix: string, cursor?: string): Promise<Page>;
+  list(id: string, prefix: string, cursor?: string, recursive?: boolean): Promise<Page>;
   detail(id: string, key: string): Promise<Detail>;
   previewDocument(id: string, key: string, format: "text" | "pdf"): Promise<Uint8Array>;
   index(id: string): Promise<Index | undefined>;

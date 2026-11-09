@@ -1970,7 +1970,7 @@ input[type="range"] {
   }
 }
 
-/* Desktop reference layout: group file actions and put advanced controls in Search. */
+/* Desktop reference layout: group file actions. */
 .bucket-entry {
   position: relative;
 }
@@ -1997,11 +1997,6 @@ input[type="range"] {
 .segmented .view-option.active {
   background: var(--bg);
   border-color: var(--border);
-}
-.search-options {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 .file-subbar .batch-bar {
   border-left: 0;

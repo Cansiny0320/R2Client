@@ -273,10 +273,10 @@ test("desktop toolbar and saved download folder work without showing a real pick
   await expect(page.getByRole("dialog", { name: "Edit storage bucket" })).toBeVisible();
   await page.getByRole("button", { name: "Close", exact: true }).click();
 
-  await expect(page.getByRole("combobox", { name: "Sort files" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Sort files" })).toBeVisible();
   await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = page.getByRole("dialog", { name: "Search files" });
-  await expect(search.getByRole("combobox", { name: "Sort files" })).toBeVisible();
+  await expect(search.getByRole("combobox", { name: "Sort files" })).toHaveCount(0);
   await search.getByRole("combobox", { name: "Filter files" }).selectOption("image");
   await search.getByRole("button", { name: "Close" }).click();
   await expect(page.getByRole("button", { name: "report.txt", exact: true })).toBeVisible();
@@ -348,9 +348,7 @@ test("desktop toolbar and saved download folder work without showing a real pick
   }
 });
 
-test("orders all folders before files even when the folder arrives on a later R2 page", async ({
-  page,
-}) => {
+test("sorts across R2 pages while keeping folders first", async ({ page }) => {
   await page.addInitScript(() => {
     const profile = {
       id: "folder-parity",
@@ -377,14 +375,20 @@ test("orders all folders before files even when the folder arrives on a later R2
             state.calls++;
             if (prefix === "z-folder/") return { items: [] };
             if (cursor === "second") {
-              return { items: [{ kind: "folder", key: "z-folder/", size: 0, modified: "" }] };
+              return {
+                items: [
+                  { kind: "folder", key: "z-folder/", size: 0, modified: "" },
+                  { kind: "object", key: "aaa.txt", size: 50, modified: "2026-11-05T00:00:00Z" },
+                  { kind: "object", key: "zzz.txt", size: 1, modified: "2026-11-09T00:00:00Z" },
+                ],
+              };
             }
             return {
               items: Array.from({ length: 200 }, (_, i) => ({
                 kind: "object",
                 key: "file-" + i + ".txt",
-                size: 1,
-                modified: "",
+                size: 10,
+                modified: "2026-11-06T00:00:00Z",
               })),
               next: "second",
             };
@@ -398,10 +402,23 @@ test("orders all folders before files even when the folder arrives on a later R2
   await expect(
     page.locator(".file-card").first().getByRole("button", { name: "z-folder", exact: true }),
   ).toBeVisible();
+  const sort = page.getByRole("combobox", { name: "Sort files" });
+  const firstFile = page.locator(".file-card").nth(1).locator(".file-name");
+  await expect(sort).toHaveValue("modified-desc");
+  await expect(firstFile).toHaveText("zzz.txt");
   await page.getByRole("button", { name: "Next page" }).click();
   await expect(folder).toHaveCount(0);
-  await page.getByRole("button", { name: "Previous page" }).click();
-  await expect(folder).toBeVisible();
+  for (const [value, name] of [
+    ["modified-asc", "aaa.txt"],
+    ["name-desc", "zzz.txt"],
+    ["name-asc", "aaa.txt"],
+    ["size-asc", "zzz.txt"],
+    ["size-desc", "aaa.txt"],
+  ] as const) {
+    await sort.selectOption(value);
+    await expect(page.locator(".file-card").first().locator(".file-name")).toHaveText("z-folder");
+    await expect(firstFile).toHaveText(name);
+  }
   await expect
     .poll(() =>
       page.evaluate(
@@ -411,6 +428,115 @@ test("orders all folders before files even when the folder arrives on a later R2
     .toBe(2);
   await folder.click();
   await expect(page.getByRole("button", { name: "z-folder", exact: true })).toBeVisible();
+});
+
+test("flat view loads nested files by prefix and keeps their object keys", async ({ page }) => {
+  await page.addInitScript(() => {
+    const profile = { id: "flat", label: "Flat fixture", bucket: "flat-fixture" };
+    const item = (key: string, kind = "object", size = 4) => ({ key, kind, size, modified: "" });
+    const older = item("photos/2025/trip.txt");
+    const newer = item("photos/2026/day/trip.txt");
+    const outside = item("other/trip.txt");
+    const marker = item("photos/empty/", "object", 0);
+    const downloads: { keys: string[]; prefix: string }[] = [];
+    let fail = true;
+    Object.assign(window, {
+      flatDownloads: downloads,
+      r2client: {
+        capabilities: { desktop: true, folders: true },
+        api: {
+          snapshot: async () => ({
+            profiles: [profile],
+            connected: [profile.id],
+            jobs: [],
+            stages: [],
+          }),
+          index: async () => ({ objects: [outside], history: [], updated: "" }),
+          list: async (_id: string, prefix: string, cursor?: string, recursive?: boolean) => {
+            if (!recursive) {
+              return {
+                items: prefix
+                  ? ["2025/", "2026/", "empty/"].map((key) => item(prefix + key, "folder", 0))
+                  : [item("photos/", "folder", 0), item("other/", "folder", 0)],
+              };
+            }
+            if (cursor) {
+              if (fail) {
+                fail = false;
+                throw new Error("Listing interrupted");
+              }
+              return { items: [newer] };
+            }
+            return prefix
+              ? { items: [older, marker], next: "nested" }
+              : { items: [older, newer, marker, outside] };
+          },
+          download: async (
+            _id: string,
+            items: { key: string }[],
+            _folder: string,
+            prefix: string,
+          ) => {
+            downloads.push({ keys: items.map(({ key }) => key), prefix });
+          },
+        },
+      },
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open folder photos" }).click();
+  await page.getByRole("checkbox", { name: "Select 2025" }).check();
+  const flat = page.getByRole("button", { name: "Flat view" });
+  await expect(flat).toHaveAttribute("aria-pressed", "false");
+  await flat.click();
+  await expect(flat).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Clear selection" })).toHaveCount(0);
+  await expect(page.getByText("Listing interrupted")).toBeVisible();
+  await expect(page.locator(".file-card")).toHaveCount(0);
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  const older = page.getByRole("button", { name: "2025/trip.txt", exact: true });
+  const newer = page.getByRole("button", { name: "2026/day/trip.txt", exact: true });
+  await expect(older).toBeVisible();
+  await expect(newer).toBeVisible();
+  await expect(page.locator(".file-card")).toHaveCount(2);
+  await page.getByRole("button", { name: "List", exact: true }).click();
+  await expect(newer).toBeVisible();
+
+  const sort = page.getByRole("combobox", { name: "Sort files" });
+  await sort.selectOption("name-desc");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  const search = page.getByRole("dialog", { name: "Search files" });
+  await search.getByRole("textbox").fill("2026");
+  await search.getByRole("button", { name: "Search" }).click();
+  await expect(newer).toBeVisible();
+  await expect(older).toHaveCount(0);
+  await page.getByRole("button", { name: "Clear search" }).click();
+  await expect(older).toBeVisible();
+  await expect(sort).toHaveValue("name-desc");
+
+  await page.getByRole("checkbox", { name: "Select 2026/day/trip.txt" }).check();
+  await page.getByRole("button", { name: "Download", exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as { flatDownloads: unknown }).flatDownloads),
+    )
+    .toEqual([{ keys: ["photos/2026/day/trip.txt"], prefix: "photos/" }]);
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await search.getByRole("textbox").fill("trip");
+  await search.getByRole("button", { name: "Search" }).click();
+  await expect(page.getByText("Search results: trip")).toBeVisible();
+  await page.getByRole("checkbox", { name: "Select 2026/day/trip.txt" }).check();
+  await flat.click();
+  await expect(page.getByText("Search results: trip")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Clear selection" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "empty", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "All files", exact: true }).click();
+  await flat.click();
+  await expect(
+    page.getByRole("button", { name: "photos/2025/trip.txt", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "other/trip.txt", exact: true })).toBeVisible();
+  await expect(page.locator(".file-card")).toHaveCount(3);
 });
 
 test("loads visible thumbnails in small batches instead of fetching the entire grid at once", async ({
@@ -552,6 +678,8 @@ test("narrow zoom keeps navigation visible and shows download finalization separ
   const nav = page.getByRole("navigation", { name: "Workspace" });
   await expect(nav.getByRole("button")).toHaveCount(5);
   expect(await nav.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+  await expect(page.getByRole("combobox", { name: "Sort files" })).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Flat view" })).toBeInViewport();
   await page.getByRole("button", { name: "Open sidebar" }).click();
   await expect(
     page.getByRole("button", { name: "Narrow workspace fixture Private" }),
