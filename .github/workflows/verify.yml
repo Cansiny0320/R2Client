@@ -46,7 +46,15 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: pnpm --filter @r2client/desktop package --${{ matrix.arch }}
+      - name: Package macOS release with the persistent identity
+        if: runner.os == 'macOS' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          R2CLIENT_MAC_CERTIFICATE_P12: ${{ secrets.R2CLIENT_MAC_CERTIFICATE_P12 }}
+          R2CLIENT_MAC_CERTIFICATE_PASSWORD: ${{ secrets.R2CLIENT_MAC_CERTIFICATE_PASSWORD }}
+        run: pnpm --filter @r2client/desktop exec node scripts/package-mac-ci.mjs --arch ${{ matrix.arch }}
+      - name: Package other targets and previews
+        if: runner.os != 'macOS' || github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
+        run: pnpm --filter @r2client/desktop package --${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
           name: r2client-${{ matrix.name }}

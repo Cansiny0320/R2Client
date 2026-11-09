@@ -13,7 +13,8 @@
   "scripts": {
     "build": "vite build && node scripts/build.mjs",
     "start": "electron .",
-    "package": "electron-builder --publish never"
+    "package": "electron-builder --publish never",
+    "package:mac:local": "pnpm build && node scripts/package-mac-local.mjs"
   },
   "dependencies": {
     "piexifjs": "1.0.6"

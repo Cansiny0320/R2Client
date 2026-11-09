@@ -22,6 +22,7 @@ import { MiB, objectCategory, safeRelative } from "@r2client/core";
 import type { Credentials, Driver, Item, Job, Source, SourceReader } from "@r2client/core";
 import { createR2 } from "@r2client/s3";
 import { ffmpegArgs, restoreJpegExif } from "./media";
+import { localCredentials } from "./local-credentials";
 
 type FileRecord = { file: string; name: string; temp?: boolean; processed?: boolean };
 const types: Record<string, string> = {
@@ -74,6 +75,8 @@ export async function desktopDriver() {
   const user = app.getPath("userData"),
     state = path.join(user, "workspace"),
     temp = path.join(user, "staging");
+  const credentials =
+    process.platform === "darwin" ? localCredentials(path.join(user, "credentials")) : undefined;
   await Promise.all([mkdir(state, { recursive: true }), mkdir(temp, { recursive: true })]);
   const chains = new Map<string, Promise<void>>();
   const fileFor = (key: string) =>
@@ -205,6 +208,11 @@ export async function desktopDriver() {
     async getSecret(id) {
       const cached = secrets.get(id);
       if (cached) return cached;
+      if (credentials) {
+        const value = await credentials.get(id).catch(() => undefined);
+        if (value) secrets.set(id, value);
+        return value;
+      }
       const encrypted = await kvLoad<string | null>("credential:" + id);
       if (!encrypted || !secure() || !(await safeStorage.isAsyncEncryptionAvailable()))
         return undefined;
@@ -221,6 +229,15 @@ export async function desktopDriver() {
       }
     },
     async setSecret(id, c, remember) {
+      if (credentials) {
+        await credentials.set(id, remember ? c : undefined);
+        if (c) secrets.set(id, c);
+        else {
+          secrets.delete(id);
+          await kvSave("credential:" + id, null);
+        }
+        return;
+      }
       if (!c) {
         secrets.delete(id);
         await kvSave("credential:" + id, null);

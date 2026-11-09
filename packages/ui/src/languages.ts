@@ -149,7 +149,7 @@ Refresh|更新|새로 고침
 Refresh files every (minutes, 0 disables)|自動更新の間隔（分、0 で無効）|파일 새로 고침 간격(분, 0은 끄기)
 Refresh transfers|転送一覧を更新|전송 새로 고침
 Regular expression|正規表現|정규 표현식
-Remember credentials in system storage|システムに認証情報を保存|시스템 저장소에 자격 증명 기억
+Remember credentials on this device|このデバイスに認証情報を保存|이 기기에 자격 증명 저장
 Remove|取り除く|제거
 Remove connection|接続設定を削除|연결 제거
 Remove record|履歴を削除|기록 제거

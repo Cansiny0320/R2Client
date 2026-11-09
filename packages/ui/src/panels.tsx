@@ -655,7 +655,7 @@ export function ConnectionModal({
       </details>
       <label className="check">
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />{" "}
-        {t("Remember credentials in system storage", "使用系统凭据存储记住密钥")}
+        {t("Remember credentials on this device", "在此设备上记住凭据")}
       </label>
       {error && (
         <div className="notice error" role="alert">
