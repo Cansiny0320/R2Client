@@ -1,38 +1,38 @@
-# R2Client
+<h1 align="center">R2Client</h1>
+<p align="center">开源 Cloudflare R2 桌面客户端，支持 macOS、Windows 和 Linux。</p>
+<p align="center">简体中文 · <a href="README.en.md">English</a></p>
+<p align="center">
+  <a href="https://github.com/Cansiny0320/R2Client/actions/workflows/verify.yml?query=branch%3Amain+is%3Asuccess">下载安装</a> ·
+  <a href="docs/hosting.md">密码分享部署</a> ·
+  <a href="https://github.com/Cansiny0320/R2Client/issues">问题反馈</a> ·
+  <a href="#赞赏">赞赏</a>
+</p>
 
-[English](#english) · [简体中文](#简体中文)
+## 使用
 
-## 简体中文
+打开上方的 GitHub Actions 链接，选择一次成功的构建，在 **Artifacts** 下载对应平台的安装包。安装包未签名，macOS 版也未公证。
 
-R2Client 是面向 Windows、macOS 和 Linux 的开源 Cloudflare R2 客户端。首次打开时，按引导填写 Account ID、桶名及 R2 S3 凭据。可以记住凭据，应用会使用系统加密存储。桌面端直接连接 R2，无需为客户端配置 CORS。
+首次打开时填写 Cloudflare Account ID、桶名和 R2 S3 凭据。应用直接连接 R2，无需配置 CORS；可在系统支持加密存储时保存凭据。
 
-- 浏览多个账号和桶，搜索、预览文件，批量复制、移动、删除、重命名和编辑元数据。
-- 上传文件、目录、剪贴板内容或 URL；支持分片、暂停、重试和断点续传。
-- 批量下载到本机、按时同步目录，查看统计，按 SHA-256 去重。
-- 分享公开链接、临时签名链接，或使用[独立密码分享服务](docs/hosting.md)。
-- 本地 FFmpeg 转码和压缩需单独[安装 FFmpeg](https://ffmpeg.org/download.html)。
+- 管理多个账号和桶，搜索、预览文件，批量移动、复制或删除对象。
+- 上传文件、目录、剪贴板内容或 URL，支持分片、续传和上传去重；也可定时同步目录到本机。
+- 分享公开链接或临时签名链接；[密码分享](docs/hosting.md)需单独部署。转码和压缩需安装 [FFmpeg](https://ffmpeg.org/download.html)。
 
-### 开发与安装
+## 开发
 
-需要 Node.js 24 和 pnpm。
+使用 Node.js 24 和 pnpm。
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm desktop:dev
-pnpm desktop:package
-pnpm check
-pnpm test
-pnpm build
-pnpm exec playwright install chromium
-pnpm test:renderer
 ```
 
-[GitHub Actions](https://github.com/Cansiny0320/R2Client/actions/workflows/verify.yml) 为 Windows x64（NSIS）、macOS arm64/x64（DMG/ZIP）和 Linux x64（AppImage/DEB）打包。安装包未配置发行者签名和 macOS notarization。
+本地打包运行 `pnpm desktop:package`。提交问题时，请附上系统版本、复现步骤和报错信息，勿附凭据。
 
-R2 目录是对象前缀，移动是复制后删除。目录同步不会删除本地文件，续传会检查对象 ETag。只读凭据可用于浏览、预览和下载；上传需要该桶的写入权限。
+## 赞赏
 
-## English
+觉得好用的话，欢迎通过[赞赏页面](https://image.cansiny.top/sponsor)用微信或支付宝支持。
 
-R2Client is an independent, open-source Cloudflare R2 desktop client for Windows, macOS and Linux. On first launch, connect a bucket using R2 S3 credentials. The app supports browsing, previewing, batch editing, resumable transfers, scheduled folder sync and local FFmpeg processing.
+![微信与支付宝赞赏二维码](.github/sponsorship.webp)
 
-Use Node.js 24 and pnpm. Run `pnpm install --frozen-lockfile` and `pnpm desktop:dev`. Run `pnpm desktop:package` for a local installer or see [CI artifacts](https://github.com/Cansiny0320/R2Client/actions/workflows/verify.yml). [Password sharing](docs/hosting.md) uses a separate optional service. Code is under [MIT](LICENSE); the project is not affiliated with Cloudflare or the commercial R2Client product.
+[MIT](LICENSE)
